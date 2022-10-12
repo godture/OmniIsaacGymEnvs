@@ -31,7 +31,7 @@ from abc import abstractmethod
 
 from omniisaacgymenvs.tasks.base.rl_task import RLTask
 
-from omni.isaac.core.utils.torch.rotations import compute_heading_and_up, compute_rot, quat_conjugate
+from omni.isaac.core.utils.torch.rotations import compute_heading_and_up, compute_rot, quat_conjugate, quat_rotate_inverse, get_euler_xyz, quat_mul
 from omni.isaac.core.utils.torch.maths import torch_rand_float, tensor_clamp, unscale
 
 from omni.isaac.core.articulations import ArticulationView
@@ -88,6 +88,11 @@ class LocomotionTask(RLTask):
         # force sensors attached to the feet
         sensor_force_torques = self._robots._physics_view.get_force_sensor_forces() # (num_envs, num_sensors, 6)
 
+        # slow down running from 210k fps to 2100 fps
+        # poses_feet = [foot.get_world_poses(clone=False) for foot in self._feet]
+        # poses_feet = [torch.cat(pose_foot, dim=-1) for pose_foot in poses_feet]
+        # velocities_feet = [foot.get_velocities(clone=False) for foot in self._feet]
+
         self.obs_buf[:], self.potentials[:], self.prev_potentials[:], self.up_vec[:], self.heading_vec[:] = get_observations(
             torso_position, torso_rotation, velocity, ang_velocity, dof_pos, dof_vel, self.targets, self.potentials, self.dt,
             self.inv_start_rot, self.basis_vec0, self.basis_vec1, self.dof_limits_lower, self.dof_limits_upper, self.dof_vel_scale,
@@ -133,9 +138,9 @@ class LocomotionTask(RLTask):
         self._robots.set_world_poses(root_pos, root_rot, indices=env_ids)
         self._robots.set_velocities(root_vel, indices=env_ids)
 
-        to_target = self.targets[env_ids] - self.initial_root_pos[env_ids]
-        to_target[:, 2] = 0.0
-        self.prev_potentials[env_ids] = -torch.norm(to_target, p=2, dim=-1) / self.dt
+        # to_target = self.targets[env_ids] - self.initial_root_pos[env_ids]
+        # to_target[:, 2] = 0.0
+        self.prev_potentials[env_ids] = self.initial_root_pos[env_ids,:2] / self.dt #-torch.norm(to_target, p=2, dim=-1) / self.dt
         self.potentials[env_ids] = self.prev_potentials[env_ids].clone()
 
         # bookkeeping
@@ -161,7 +166,7 @@ class LocomotionTask(RLTask):
         self.targets = torch.tensor([1000, 0, 0], dtype=torch.float32, device=self._device).repeat((self.num_envs, 1))
         self.target_dirs = torch.tensor([1, 0, 0], dtype=torch.float32, device=self._device).repeat((self.num_envs, 1))
         self.dt = 1.0 / 60.0
-        self.potentials = torch.tensor([-1000.0 / self.dt], dtype=torch.float32, device=self._device).repeat(self.num_envs)
+        self.potentials = self.initial_root_pos[...,:2] / self.dt # self.torch.tensor([-1000.0 / self.dt], dtype=torch.float32, device=self._device).repeat(self.num_envs)
         self.prev_potentials = self.potentials.clone()
 
         self.actions = torch.zeros((self.num_envs, self.num_actions), device=self._device)
@@ -220,7 +225,7 @@ def get_observations(
     to_target[:, 2] = 0.0
 
     prev_potentials = potentials.clone()
-    potentials = -torch.norm(to_target, p=2, dim=-1) / dt
+    potentials = torso_position[...,:2] / dt # -torch.norm(to_target, p=2, dim=-1) / dt
 
     torso_quat, up_proj, heading_proj, up_vec, heading_vec = compute_heading_and_up(
         torso_rotation, inv_start_rot, to_target, basis_vec0, basis_vec1, 2
@@ -301,8 +306,9 @@ def calculate_metrics(
     electricity_cost = torch.sum(torch.abs(actions * obs_buf[:, 12+num_dof:12+num_dof*2])* motor_effort_ratio.unsqueeze(0), dim=-1)
 
     # reward for duration of staying alive
-    alive_reward = torch.ones_like(potentials) * alive_reward_scale
-    progress_reward = potentials - prev_potentials
+    alive_reward = torch.ones_like(obs_buf[...,0]) * alive_reward_scale
+    progress_reward = potentials[...,0] - prev_potentials[...,0]
+    off_track_cost = torch.abs(potentials[...,1] - prev_potentials[...,1])
 
     total_reward = (
         progress_reward
@@ -312,6 +318,7 @@ def calculate_metrics(
         - actions_cost_scale * actions_cost
         - energy_cost_scale * electricity_cost
         - dof_at_limit_cost
+        - off_track_cost
     )
 
     # adjust reward for fallen agents

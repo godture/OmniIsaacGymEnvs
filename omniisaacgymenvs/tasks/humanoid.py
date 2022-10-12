@@ -35,6 +35,7 @@ from omni.isaac.core.utils.torch.rotations import compute_heading_and_up, comput
 from omni.isaac.core.utils.torch.maths import torch_rand_float, tensor_clamp, unscale
 
 from omni.isaac.core.articulations import ArticulationView
+from omni.isaac.core.prims import RigidPrimView
 from omni.isaac.core.utils.prims import get_prim_at_path
 
 import numpy as np
@@ -56,7 +57,7 @@ class HumanoidLocomotionTask(LocomotionTask):
         self._sim_config = sim_config
         self._cfg = sim_config.config
         self._task_cfg = sim_config.task_config
-        self._num_observations = 87
+        self._num_observations = 87 #-12
         self._num_actions = 21
         self._humanoid_positions = torch.tensor([0, 0, 1.34])
 
@@ -67,6 +68,10 @@ class HumanoidLocomotionTask(LocomotionTask):
         self.get_humanoid()
         RLTask.set_up_scene(self, scene)
         self._humanoids = ArticulationView(prim_paths_expr="/World/envs/.*/Humanoid/torso", name="humanoid_view", reset_xform_properties=False)
+        # self._feet = [RigidPrimView(prim_paths_expr="/World/envs/.*/Humanoid/left_foot", name="left_feet_view", reset_xform_properties=False),
+        #                 RigidPrimView(prim_paths_expr="/World/envs/.*/Humanoid/right_foot", name="right_feet_view", reset_xform_properties=False)]
+        # self._left_feet = RigidPrimView(prim_paths_expr="/World/envs/.*/Humanoid/left_foot", name="left_feet_view", reset_xform_properties=False)
+        # self._right_feet = RigidPrimView(prim_paths_expr="/World/envs/.*/Humanoid/right_foot", name="right_feet_view", reset_xform_properties=False)
         scene.add(self._humanoids)
         return
 
