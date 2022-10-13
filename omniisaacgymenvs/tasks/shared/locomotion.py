@@ -96,7 +96,7 @@ class LocomotionTask(RLTask):
         self.obs_buf[:], self.potentials[:], self.prev_potentials[:], self.up_vec[:], self.heading_vec[:] = get_observations(
             torso_position, torso_rotation, velocity, ang_velocity, dof_pos, dof_vel, self.targets, self.potentials, self.dt,
             self.inv_start_rot, self.basis_vec0, self.basis_vec1, self.dof_limits_lower, self.dof_limits_upper, self.dof_vel_scale,
-            sensor_force_torques, self._num_envs, self.contact_force_scale, self.actions, self.angular_velocity_scale
+            sensor_force_torques, self._num_envs, self.contact_force_scale, self.actions, self.angular_velocity_scale, self.target_vels
         )
         observations = {
             self._robots.name: {
@@ -142,6 +142,7 @@ class LocomotionTask(RLTask):
         # to_target[:, 2] = 0.0
         self.prev_potentials[env_ids] = self.initial_root_pos[env_ids,:2] / self.dt #-torch.norm(to_target, p=2, dim=-1) / self.dt
         self.potentials[env_ids] = self.prev_potentials[env_ids].clone()
+        self.target_vels[env_ids] = torch.rand([num_resets, 1], device=self._device, dtype=torch.float32) * 10.
 
         # bookkeeping
         self.reset_buf[env_ids] = 0
@@ -166,6 +167,7 @@ class LocomotionTask(RLTask):
         self.targets = torch.tensor([1000, 0, 0], dtype=torch.float32, device=self._device).repeat((self.num_envs, 1))
         self.target_dirs = torch.tensor([1, 0, 0], dtype=torch.float32, device=self._device).repeat((self.num_envs, 1))
         self.dt = 1.0 / 60.0
+        self.target_vels = torch.rand([self.num_envs, 1], device=self._device, dtype=torch.float32) * 10. # random target velocities in [0, 10]m/s
         self.potentials = self.initial_root_pos[...,:2] / self.dt # self.torch.tensor([-1000.0 / self.dt], dtype=torch.float32, device=self._device).repeat(self.num_envs)
         self.prev_potentials = self.potentials.clone()
 
@@ -217,9 +219,10 @@ def get_observations(
     num_envs,
     contact_force_scale,
     actions,
-    angular_velocity_scale
+    angular_velocity_scale,
+    target_vels
 ):
-    # type: (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, float, Tensor, Tensor, Tensor, Tensor, Tensor, float, Tensor, int, float, Tensor, float) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]
+    # type: (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, float, Tensor, Tensor, Tensor, Tensor, Tensor, float, Tensor, int, float, Tensor, float, Tensor) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]
 
     to_target = targets - torso_position
     to_target[:, 2] = 0.0
@@ -252,6 +255,7 @@ def get_observations(
             dof_vel * dof_vel_scale,
             sensor_force_torques.reshape(num_envs, -1) * contact_force_scale,
             actions,
+            target_vels,
         ),
         dim=-1,
     )
@@ -307,11 +311,13 @@ def calculate_metrics(
 
     # reward for duration of staying alive
     alive_reward = torch.ones_like(obs_buf[...,0]) * alive_reward_scale
-    progress_reward = potentials[...,0] - prev_potentials[...,0]
+    velocity = potentials[...,0] - prev_potentials[...,0]
+    diff_velocity = torch.abs(velocity - obs_buf[...,-1])
+    vel_track_reward = torch.where(velocity<obs_buf[...,-1], velocity, obs_buf[...,-1]-diff_velocity)
     off_track_cost = torch.abs(potentials[...,1] - prev_potentials[...,1])
 
     total_reward = (
-        progress_reward
+        vel_track_reward
         + alive_reward
         + up_reward
         + heading_reward
