@@ -250,7 +250,7 @@ def get_observations(
             heading_proj.unsqueeze(-1),
             dof_pos_scaled,
             dof_vel * dof_vel_scale,
-            sensor_force_torques.reshape(num_envs, -1) * contact_force_scale,
+            # sensor_force_torques.reshape(num_envs, -1) * contact_force_scale,
             actions,
         ),
         dim=-1,
