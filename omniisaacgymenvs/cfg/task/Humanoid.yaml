@@ -28,7 +28,7 @@ env:
   contactForceScale: 0.01
   jointsAtLimitCost: 0.25
   deathCost: -1.0
-  terminationHeight: 0.8
+  terminationHeight: 1.8
   alive_reward_scale: 2.0
 
 sim:
@@ -88,3 +88,19 @@ sim:
     # per-body
     density: -1
     max_depenetration_velocity: 10.0
+
+  wood:
+    # -1 to use default values
+    override_usd_defaults: False
+    fixed_base: True
+    enable_self_collisions: False
+    enable_gyroscopic_forces: True
+    # also in stage params
+    # per-actor
+    solver_position_iteration_count: 0
+    solver_velocity_iteration_count: 0
+    sleep_threshold: 0.005
+    stabilization_threshold: 0.001
+    # per-body
+    density: 200
+    max_depenetration_velocity: 1000.0
