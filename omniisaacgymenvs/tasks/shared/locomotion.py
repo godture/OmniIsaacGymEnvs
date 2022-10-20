@@ -41,6 +41,8 @@ import numpy as np
 import torch
 import math
 
+# rotate local coordinate system by local z axis for 0,90,180,270 degrees to project legs' observations to the same space
+QUATS_LEGS = torch.tensor([[[1,0,0,0]],[[0.7071068, 0, 0, 0.7071068]],[[0,0,0,1]],[[-0.7071068, 0, 0, 0.7071068]]])
 
 class LocomotionTask(RLTask):
     def __init__(
@@ -67,6 +69,14 @@ class LocomotionTask(RLTask):
         self.alive_reward_scale = self._task_cfg["env"]["alive_reward_scale"]
 
         RLTask.__init__(self, name, env)
+        self.get_obs = get_observations
+        self.quats_legs = None
+        self.calc_metrics = calculate_metrics
+        if self._cfg['task_name'] == "Ant":
+            self.calc_metrics = calculate_metrics_ant
+            if 'masa' in self._cfg['train']['params']['network']['name']:
+                self.get_obs = get_observations_antmasa
+                self.quats_legs = QUATS_LEGS.repeat(1,self._num_envs,1).to(self._device)
         return
 
     @abstractmethod
@@ -93,7 +103,7 @@ class LocomotionTask(RLTask):
         # poses_feet = [torch.cat(pose_foot, dim=-1) for pose_foot in poses_feet]
         # velocities_feet = [foot.get_velocities(clone=False) for foot in self._feet]
 
-        self.obs_buf[:], self.potentials[:], self.prev_potentials[:], self.up_vec[:], self.heading_vec[:] = get_observations(
+        self.obs_buf[:], self.potentials[:], self.prev_potentials[:], self.up_vec[:], self.heading_vec[:] = self.get_obs(
             torso_position, torso_rotation, velocity, ang_velocity, dof_pos, dof_vel, self.targets, self.potentials, self.dt,
             self.inv_start_rot, self.basis_vec0, self.basis_vec1, self.dof_limits_lower, self.dof_limits_upper, self.dof_vel_scale,
             sensor_force_torques, self._num_envs, self.contact_force_scale, self.actions, self.angular_velocity_scale
@@ -176,7 +186,7 @@ class LocomotionTask(RLTask):
         self.reset_idx(indices)
 
     def calculate_metrics(self) -> None:
-        self.rew_buf[:] = calculate_metrics(
+        self.rew_buf[:] = self.calc_metrics(
             self.obs_buf, self.actions, self.up_weight, self.heading_weight, self.potentials, self.prev_potentials,
             self.actions_cost_scale, self.energy_cost_scale, self.termination_height,
             self.death_cost, self._robots.num_dof, self.get_dof_at_limit_cost(), self.alive_reward_scale, self.motor_effort_ratio
@@ -217,9 +227,10 @@ def get_observations(
     num_envs,
     contact_force_scale,
     actions,
-    angular_velocity_scale
+    angular_velocity_scale,
+    quats_legs
 ):
-    # type: (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, float, Tensor, Tensor, Tensor, Tensor, Tensor, float, Tensor, int, float, Tensor, float) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]
+    # type: (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, float, Tensor, Tensor, Tensor, Tensor, Tensor, float, Tensor, int, float, Tensor, float, Tensor) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]
 
     to_target = targets - torso_position
     to_target[:, 2] = 0.0
@@ -258,6 +269,100 @@ def get_observations(
 
     return obs, potentials, prev_potentials, up_vec, heading_vec
 
+# @torch.jit.script
+def get_observations_antmasa(
+    torso_position,
+    torso_rotation,
+    velocity,
+    ang_velocity,
+    dof_pos,
+    dof_vel,
+    targets,
+    potentials,
+    dt,
+    inv_start_rot,
+    basis_vec0,
+    basis_vec1,
+    dof_limits_lower,
+    dof_limits_upper,
+    dof_vel_scale,
+    sensor_force_torques,
+    num_envs,
+    contact_force_scale,
+    actions,
+    angular_velocity_scale,
+    quats_legs
+):
+    # type: (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, float, Tensor, Tensor, Tensor, Tensor, Tensor, float, Tensor, int, float, Tensor, float, Tensor) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]
+
+    to_target = targets - torso_position
+    to_target[:, 2] = 0.0
+
+    prev_potentials = potentials.clone()
+    potentials = torso_position[...,:2] / dt # -torch.norm(to_target, p=2, dim=-1) / dt
+
+    num_batch = velocity.shape[0]
+    vel_locs = torch.zeros([num_batch,12], device=velocity.device, dtype=velocity.dtype)
+    angvel_locs = torch.zeros([num_batch,12], device=velocity.device, dtype=velocity.dtype)
+    yaws = torch.zeros([num_batch,4], device=velocity.device, dtype=velocity.dtype)
+    rolls = torch.zeros([num_batch,4], device=velocity.device, dtype=velocity.dtype)
+    angles_to_target = torch.zeros([num_batch,4], device=velocity.device, dtype=velocity.dtype)
+    heading_projs = torch.zeros([num_batch,4], device=velocity.device, dtype=velocity.dtype)
+    up_proj = None
+    up_vec = None
+    heading_vec = None
+    for i,quat_leg in enumerate(quats_legs):
+        torso_r_leg = quat_mul(torso_rotation, quat_leg.unsqueeze(0))
+        torso_quat, u_proj, heading_proj, u_vec, h_vec = compute_heading_and_up(
+            torso_r_leg, inv_start_rot, to_target, basis_vec0, basis_vec1, 2
+        )
+        vel_loc, angvel_loc, roll, pitch, yaw, angle_to_target = compute_rot(
+            torso_quat, velocity, ang_velocity, targets, torso_position
+        )
+        vel_locs[...,i*3:(i+1)*3] = vel_loc
+        angvel_locs[...,i*3:(i+1)*3] = angvel_loc
+        yaws[...,i] = yaw
+        rolls[...,i] = roll
+        heading_projs[...,i] = heading_proj
+        angles_to_target[...,i] = angle_to_target
+        if heading_vec is None: heading_vec = h_vec
+        if up_vec is None: up_vec = u_vec
+        if up_proj is None: up_proj = u_proj
+        
+
+    # torso_quat, up_proj, heading_proj, up_vec, heading_vec = compute_heading_and_up(
+    #     torso_rotation, inv_start_rot, to_target, basis_vec0, basis_vec1, 2
+    # )
+
+    # vel_loc, angvel_loc, roll, pitch, yaw, angle_to_target = compute_rot(
+    #     torso_quat, velocity, ang_velocity, targets, torso_position
+    # )
+
+    dof_pos_scaled = unscale(dof_pos, dof_limits_lower, dof_limits_upper)
+    dof_pos_scaled[...,5:7] = - dof_pos_scaled[...,5:7]
+    dof_vel[...,5:7] = - dof_vel[...,5:7]
+    actions[...,5:7] = - actions[...,5:7]
+
+    # obs_buf shapes: 1, 3, 3, 1, 1, 1, 1, 1, num_dofs, num_dofs, num_sensors * 6, num_dofs
+    obs = torch.cat(
+        (
+            torso_position[:, 2].view(-1, 1),
+            vel_locs,
+            angvel_locs * angular_velocity_scale,
+            normalize_angle(yaws),
+            normalize_angle(rolls),
+            normalize_angle(angles_to_target),
+            up_proj.unsqueeze(-1),
+            heading_projs,
+            dof_pos_scaled,
+            dof_vel * dof_vel_scale,
+            # sensor_force_torques.reshape(num_envs, -1) * contact_force_scale,
+            actions,
+        ),
+        dim=-1,
+    )
+
+    return obs, potentials, prev_potentials, up_vec, heading_vec
 
 @torch.jit.script
 def is_done(
@@ -315,6 +420,71 @@ def calculate_metrics(
         + alive_reward
         + up_reward
         + heading_reward
+        - actions_cost_scale * actions_cost
+        - energy_cost_scale * electricity_cost
+        - dof_at_limit_cost
+        - off_track_cost
+    )
+
+    # adjust reward for fallen agents
+    total_reward = torch.where(
+        obs_buf[:, 0] < termination_height, torch.ones_like(total_reward) * death_cost, total_reward
+    )
+    return total_reward
+
+@torch.jit.script
+def calculate_metrics_ant(
+    obs_buf,
+    actions,
+    up_weight,
+    heading_weight,
+    potentials,
+    prev_potentials,
+    actions_cost_scale,
+    energy_cost_scale,
+    termination_height,
+    death_cost,
+    num_dof,
+    dof_at_limit_cost,
+    alive_reward_scale,
+    motor_effort_ratio
+):
+    # type: (Tensor, Tensor, float, float, Tensor, Tensor, float, float, float, float, int, Tensor, float, Tensor) -> Tensor
+
+    # heading_weight_tensor = torch.ones_like(obs_buf[:, 11]) * heading_weight
+    # heading_reward = torch.where(
+    #     obs_buf[:, 11] > 0.8, heading_weight_tensor, heading_weight * obs_buf[:, 11] / 0.8
+    # )
+
+
+
+
+
+    # TODO: finish the metrics calculation
+
+
+
+
+
+
+    # aligning up axis of robot and environment
+    up_reward = torch.zeros_like(obs_buf[:,0])
+    up_reward = torch.where(obs_buf[:, 10] > 0.93, up_reward + up_weight, up_reward)
+
+    # energy penalty for movement
+    actions_cost = torch.sum(actions ** 2, dim=-1)
+    electricity_cost = torch.sum(torch.abs(actions * obs_buf[:, 12+num_dof:12+num_dof*2])* motor_effort_ratio.unsqueeze(0), dim=-1)
+
+    # reward for duration of staying alive
+    alive_reward = torch.ones_like(obs_buf[...,0]) * alive_reward_scale
+    progress_reward = potentials[...,0] - prev_potentials[...,0]
+    off_track_cost = torch.abs(potentials[...,1] - prev_potentials[...,1])
+
+    total_reward = (
+        progress_reward
+        + alive_reward
+        + up_reward
+        # + heading_reward
         - actions_cost_scale * actions_cost
         - energy_cost_scale * electricity_cost
         - dof_at_limit_cost
