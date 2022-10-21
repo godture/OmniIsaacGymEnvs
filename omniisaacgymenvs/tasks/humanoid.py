@@ -58,7 +58,7 @@ class HumanoidLocomotionTask(LocomotionTask):
         self._sim_config = sim_config
         self._cfg = sim_config.config
         self._task_cfg = sim_config.task_config
-        self._num_observations = 87 -12
+        self._num_observations = self._cfg['train']['num_observations']
         self._num_actions = 21
         self._humanoid_positions = torch.tensor([0, 0, 2.34])
         self._wood_position = torch.tensor([65, 0, 0.79])

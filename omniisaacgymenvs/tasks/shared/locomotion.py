@@ -106,7 +106,7 @@ class LocomotionTask(RLTask):
         self.obs_buf[:], self.potentials[:], self.prev_potentials[:], self.up_vec[:], self.heading_vec[:] = self.get_obs(
             torso_position, torso_rotation, velocity, ang_velocity, dof_pos, dof_vel, self.targets, self.potentials, self.dt,
             self.inv_start_rot, self.basis_vec0, self.basis_vec1, self.dof_limits_lower, self.dof_limits_upper, self.dof_vel_scale,
-            sensor_force_torques, self._num_envs, self.contact_force_scale, self.actions, self.angular_velocity_scale
+            sensor_force_torques, self._num_envs, self.contact_force_scale, self.actions, self.angular_velocity_scale, self.quats_legs
         )
         observations = {
             self._robots.name: {
@@ -312,7 +312,7 @@ def get_observations_antmasa(
     up_vec = None
     heading_vec = None
     for i,quat_leg in enumerate(quats_legs):
-        torso_r_leg = quat_mul(torso_rotation, quat_leg.unsqueeze(0))
+        torso_r_leg = quat_mul(torso_rotation, quat_leg)
         torso_quat, u_proj, heading_proj, u_vec, h_vec = compute_heading_and_up(
             torso_r_leg, inv_start_rot, to_target, basis_vec0, basis_vec1, 2
         )
@@ -339,9 +339,11 @@ def get_observations_antmasa(
     # )
 
     dof_pos_scaled = unscale(dof_pos, dof_limits_lower, dof_limits_upper)
-    dof_pos_scaled[...,5:7] = - dof_pos_scaled[...,5:7]
-    dof_vel[...,5:7] = - dof_vel[...,5:7]
-    actions[...,5:7] = - actions[...,5:7]
+    # foot joint directions of legs 1 and 2 are different from that of 0 and 3
+    # maybe reverse them in the network
+    # dof_pos_scaled[...,5:7] = - dof_pos_scaled[...,5:7]
+    # dof_vel[...,5:7] = - dof_vel[...,5:7]
+    # actions[...,5:7] = - actions[...,5:7]
 
     # obs_buf shapes: 1, 3, 3, 1, 1, 1, 1, 1, num_dofs, num_dofs, num_sensors * 6, num_dofs
     obs = torch.cat(
@@ -451,32 +453,23 @@ def calculate_metrics_ant(
 ):
     # type: (Tensor, Tensor, float, float, Tensor, Tensor, float, float, float, float, int, Tensor, float, Tensor) -> Tensor
 
-    # heading_weight_tensor = torch.ones_like(obs_buf[:, 11]) * heading_weight
-    # heading_reward = torch.where(
-    #     obs_buf[:, 11] > 0.8, heading_weight_tensor, heading_weight * obs_buf[:, 11] / 0.8
-    # )
-
-
-
-
-
-    # TODO: finish the metrics calculation
-
-
-
-
-
-
     # aligning up axis of robot and environment
     up_reward = torch.zeros_like(obs_buf[:,0])
-    up_reward = torch.where(obs_buf[:, 10] > 0.93, up_reward + up_weight, up_reward)
 
     # energy penalty for movement
     actions_cost = torch.sum(actions ** 2, dim=-1)
-    electricity_cost = torch.sum(torch.abs(actions * obs_buf[:, 12+num_dof:12+num_dof*2])* motor_effort_ratio.unsqueeze(0), dim=-1)
+    if obs_buf.shape[-1] == 36:
+        up_reward = torch.where(obs_buf[:, 10] > 0.93, up_reward + up_weight, up_reward)
+        electricity_cost = torch.sum(torch.abs(actions * obs_buf[:, 12+num_dof:12+num_dof*2])* motor_effort_ratio.unsqueeze(0), dim=-1)
+    elif obs_buf.shape[-1] == 66:
+        up_reward = torch.where(obs_buf[:, 37] > 0.93, up_reward + up_weight, up_reward)
+        electricity_cost = torch.sum(torch.abs(actions * obs_buf[:, 42+num_dof:42+num_dof*2])* motor_effort_ratio.unsqueeze(0), dim=-1)
+    else:
+        assert False, f"observation shape {obs_buf.shape[-1]} not exist"
 
     # reward for duration of staying alive
     alive_reward = torch.ones_like(obs_buf[...,0]) * alive_reward_scale
+
     progress_reward = potentials[...,0] - prev_potentials[...,0]
     off_track_cost = torch.abs(potentials[...,1] - prev_potentials[...,1])
 
@@ -484,7 +477,7 @@ def calculate_metrics_ant(
         progress_reward
         + alive_reward
         + up_reward
-        # + heading_reward
+        # + heading_reward # no heading reward for ant central symmetry
         - actions_cost_scale * actions_cost
         - energy_cost_scale * electricity_cost
         - dof_at_limit_cost
