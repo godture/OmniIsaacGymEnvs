@@ -92,4 +92,9 @@ class AntLocomotionTask(LocomotionTask):
 @torch.jit.script
 def get_dof_at_limit_cost(obs_buf, num_dof):
     # type: (Tensor, int) -> Tensor
-    return torch.sum(obs_buf[:, 42:42+num_dof] > 0.99, dim=-1)
+    if obs_buf.shape[-1] == 36:
+        return torch.sum(obs_buf[:, 12:12+num_dof] > 0.99, dim=-1)
+    elif obs_buf.shape[-1] in [66, 74]:
+        return torch.sum(obs_buf[:, 42:42+num_dof] > 0.99, dim=-1)
+    else:
+        assert False, f"observation shape {obs_buf.shape[-1]} not exist"

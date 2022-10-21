@@ -351,15 +351,17 @@ def get_observations_antmasa(
             torso_position[:, 2].view(-1, 1),
             vel_locs,
             angvel_locs * angular_velocity_scale,
-            normalize_angle(yaws),
+            torch.sin(yaws),
             normalize_angle(rolls),
-            normalize_angle(angles_to_target),
+            torch.sin(angles_to_target),
             up_proj.unsqueeze(-1),
             heading_projs,
             dof_pos_scaled,
             dof_vel * dof_vel_scale,
             # sensor_force_torques.reshape(num_envs, -1) * contact_force_scale,
             actions,
+            torch.cos(yaws),
+            torch.cos(angles_to_target)
         ),
         dim=-1,
     )
@@ -461,7 +463,7 @@ def calculate_metrics_ant(
     if obs_buf.shape[-1] == 36:
         up_reward = torch.where(obs_buf[:, 10] > 0.93, up_reward + up_weight, up_reward)
         electricity_cost = torch.sum(torch.abs(actions * obs_buf[:, 12+num_dof:12+num_dof*2])* motor_effort_ratio.unsqueeze(0), dim=-1)
-    elif obs_buf.shape[-1] == 66:
+    elif obs_buf.shape[-1] in [66, 74]:
         up_reward = torch.where(obs_buf[:, 37] > 0.93, up_reward + up_weight, up_reward)
         electricity_cost = torch.sum(torch.abs(actions * obs_buf[:, 42+num_dof:42+num_dof*2])* motor_effort_ratio.unsqueeze(0), dim=-1)
     else:
