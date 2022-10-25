@@ -304,30 +304,35 @@ def get_observations_antmasa(
     num_batch = velocity.shape[0]
     vel_locs = torch.zeros([num_batch,12], device=velocity.device, dtype=velocity.dtype)
     angvel_locs = torch.zeros([num_batch,12], device=velocity.device, dtype=velocity.dtype)
-    yaws = torch.zeros([num_batch,4], device=velocity.device, dtype=velocity.dtype)
+    # yaws = torch.zeros([num_batch,4], device=velocity.device, dtype=velocity.dtype)
     rolls = torch.zeros([num_batch,4], device=velocity.device, dtype=velocity.dtype)
-    angles_to_target = torch.zeros([num_batch,4], device=velocity.device, dtype=velocity.dtype)
+    pitches = torch.zeros([num_batch,4], device=velocity.device, dtype=velocity.dtype)
+    # angles_to_target = torch.zeros([num_batch,4], device=velocity.device, dtype=velocity.dtype)
     heading_projs = torch.zeros([num_batch,4], device=velocity.device, dtype=velocity.dtype)
     up_proj = None
     up_vec = None
     heading_vec = None
+    target_vec_locs = torch.zeros([num_batch,12], device=velocity.device, dtype=velocity.dtype)
     for i,quat_leg in enumerate(quats_legs):
         torso_r_leg = quat_mul(torso_rotation, quat_leg)
-        torso_quat, u_proj, heading_proj, u_vec, h_vec = compute_heading_and_up(
+        torso_quat_leg, u_proj, heading_proj, u_vec, h_vec = compute_heading_and_up(
             torso_r_leg, inv_start_rot, to_target, basis_vec0, basis_vec1, 2
         )
+        target_vec_loc = quat_rotate_inverse(torso_quat_leg, basis_vec0)
         vel_loc, angvel_loc, roll, pitch, yaw, angle_to_target = compute_rot(
-            torso_quat, velocity, ang_velocity, targets, torso_position
+            torso_quat_leg, velocity, ang_velocity, targets, torso_position
         )
-        vel_locs[...,i*3:(i+1)*3] = vel_loc
-        angvel_locs[...,i*3:(i+1)*3] = angvel_loc
-        yaws[...,i] = yaw
-        rolls[...,i] = roll
-        heading_projs[...,i] = heading_proj
-        angles_to_target[...,i] = angle_to_target
+        vel_locs[:,i*3:(i+1)*3] = vel_loc
+        angvel_locs[:,i*3:(i+1)*3] = angvel_loc
+        # yaws[...,i] = yaw
+        pitches[:,i] = pitch
+        rolls[:,i] = roll
+        heading_projs[:,i] = heading_proj
+        # angles_to_target[...,i] = angle_to_target
         if heading_vec is None: heading_vec = h_vec
         if up_vec is None: up_vec = u_vec
         if up_proj is None: up_proj = u_proj
+        target_vec_locs[:,i*3:(i+1)*3] = target_vec_loc
         
 
     # torso_quat, up_proj, heading_proj, up_vec, heading_vec = compute_heading_and_up(
@@ -351,11 +356,13 @@ def get_observations_antmasa(
             torso_position[:, 2].view(-1, 1),
             vel_locs,
             angvel_locs * angular_velocity_scale,
-            normalize_angle(yaws),
+            # normalize_angle(yaws),
+            normalize_angle(pitches),
             normalize_angle(rolls),
-            normalize_angle(angles_to_target),
+            # normalize_angle(angles_to_target),
+            target_vec_locs,
             up_proj.unsqueeze(-1),
-            heading_projs,
+            # heading_projs,
             dof_pos_scaled,
             dof_vel * dof_vel_scale,
             # sensor_force_torques.reshape(num_envs, -1) * contact_force_scale,
@@ -461,11 +468,14 @@ def calculate_metrics_ant(
     if obs_buf.shape[-1] == 36:
         up_reward = torch.where(obs_buf[:, 10] > 0.93, up_reward + up_weight, up_reward)
         electricity_cost = torch.sum(torch.abs(actions * obs_buf[:, 12+num_dof:12+num_dof*2])* motor_effort_ratio.unsqueeze(0), dim=-1)
-    elif obs_buf.shape[-1] == 66:
-        up_reward = torch.where(obs_buf[:, 37] > 0.93, up_reward + up_weight, up_reward)
-        electricity_cost = torch.sum(torch.abs(actions * obs_buf[:, 42+num_dof:42+num_dof*2])* motor_effort_ratio.unsqueeze(0), dim=-1)
+    # elif obs_buf.shape[-1] == 70:
+    #     up_reward = torch.where(obs_buf[:, 45] > 0.93, up_reward + up_weight, up_reward)
+    #     electricity_cost = torch.sum(torch.abs(actions * obs_buf[:, 46+num_dof:46+num_dof*2])* motor_effort_ratio.unsqueeze(0), dim=-1)
+    # elif obs_buf.shape[-1] == 66:
+    #     up_reward = torch.where(obs_buf[:, 37] > 0.93, up_reward + up_weight, up_reward)
+    #     electricity_cost = torch.sum(torch.abs(actions * obs_buf[:, 42+num_dof:42+num_dof*2])* motor_effort_ratio.unsqueeze(0), dim=-1)
     else:
-        assert False, f"observation shape {obs_buf.shape[-1]} not exist"
+        assert False, f"no masa version for simple locomotion task. Observation shape {obs_buf.shape[-1]} not exist"
 
     # reward for duration of staying alive
     alive_reward = torch.ones_like(obs_buf[...,0]) * alive_reward_scale

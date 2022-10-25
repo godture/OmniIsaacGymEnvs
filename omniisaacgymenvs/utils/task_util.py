@@ -30,6 +30,7 @@
 def initialize_task(config, env, init_sim=True):
     from omniisaacgymenvs.tasks.allegro_hand import AllegroHandTask
     from omniisaacgymenvs.tasks.ant import AntLocomotionTask
+    from omniisaacgymenvs.tasks.ant_balance_bar import AntBalanceTask
     from omniisaacgymenvs.tasks.anymal import AnymalTask
     from omniisaacgymenvs.tasks.anymal_terrain import AnymalTerrainTask
     from omniisaacgymenvs.tasks.ball_balance import BallBalanceTask
@@ -45,6 +46,7 @@ def initialize_task(config, env, init_sim=True):
     task_map = {
         "AllegroHand": AllegroHandTask,
         "Ant": AntLocomotionTask,
+        "AntBalance": AntBalanceTask,
         "Anymal": AnymalTask,
         "AnymalTerrain": AnymalTerrainTask,
         "BallBalance": BallBalanceTask,
