@@ -34,7 +34,7 @@ from omni.isaac.core.utils.torch.rotations import compute_up, compute_rot_notarg
 from omni.isaac.core.utils.torch.maths import torch_rand_float, tensor_clamp, unscale
 from omni.isaac.core.articulations import ArticulationView
 from omni.isaac.core.utils.prims import get_prim_at_path
-from omni.isaac.core.objects import DynamicCylinder
+from omni.isaac.core.objects import DynamicSphere
 from omni.isaac.core.prims import RigidPrimView
 
 from pxr import PhysxSchema
@@ -61,7 +61,7 @@ class AntBalanceTask(RLTask):
         self._num_observations = self._cfg['train']['num_observations']
         self._num_actions = 8
         self._ant_positions = torch.tensor([0, 0, 0.5])
-        self._wood_position = torch.tensor([0.0, 0.0, 2.8])
+        self._wood_position = torch.tensor([0.0, 0.0, 0.95])
 
         self._num_envs = self._task_cfg["env"]["numEnvs"]
         self._env_spacing = self._task_cfg["env"]["envSpacing"]
@@ -102,14 +102,21 @@ class AntBalanceTask(RLTask):
         return
     
     def add_wood(self):
-        wood = DynamicCylinder(
+        wood = DynamicSphere(
             prim_path=self.default_zero_env_path + "/Wood/wood", 
             translation=self._wood_position, 
             name="wood_0",
-            radius = 0.1,
-            height= 4.0,
+            radius = 0.3,
             color=torch.tensor([0.9, 0.6, 0.2]),
         )
+        # wood = DynamicCylinder(
+        #     prim_path=self.default_zero_env_path + "/Wood/wood", 
+        #     translation=self._wood_position, 
+        #     name="wood_0",
+        #     radius = 0.1,
+        #     height= 4.0,
+        #     color=torch.tensor([0.9, 0.6, 0.2]),
+        # )
         self._sim_config.apply_articulation_settings("wood", get_prim_at_path(wood.prim_path), self._sim_config.parse_actor_config("wood"))
 
     def get_ant(self):
@@ -467,7 +474,7 @@ def calculate_metrics(
     total_reward = (
         target_tracking_reward
         + alive_reward
-        + up_reward
+        # + up_reward
         # + heading_reward # no heading reward for ant central symmetry
         - actions_cost_scale * actions_cost
         - energy_cost_scale * electricity_cost
@@ -476,7 +483,7 @@ def calculate_metrics(
 
     # adjust reward for fallen agents
     total_reward = torch.where(
-        torch.logical_or(z_proj_wood < 0.8, z_woods < 0.85), torch.ones_like(total_reward) * death_cost, total_reward
+        z_woods < 0.65, torch.ones_like(total_reward) * death_cost, total_reward
     )
     return total_reward
 
@@ -491,6 +498,6 @@ def is_done(
     z_proj_wood
 ):
     # type: (Tensor, float, Tensor, Tensor, float, Tensor, Tensor) -> Tensor
-    reset = torch.where(torch.logical_or(z_proj_wood < 0.8, z_woods < 2.+ termination_height), torch.ones_like(reset_buf), reset_buf)
+    reset = torch.where(z_woods < 0.65, torch.ones_like(reset_buf), reset_buf)
     reset = torch.where(progress_buf >= max_episode_length - 1, torch.ones_like(reset_buf), reset)
     return reset
