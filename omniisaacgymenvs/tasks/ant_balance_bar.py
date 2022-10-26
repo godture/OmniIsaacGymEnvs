@@ -89,6 +89,8 @@ class AntBalanceTask(RLTask):
         if 'masa' in self._cfg['train']['params']['network']['name']:
             self.get_obs = get_observations_masa
             self.quats_legs = QUATS_LEGS.repeat(1,self._num_envs,1).to(self._device)
+        self.shared_agents_inds = torch.tensor(self._cfg['train']['params']['network'].get('shared_agents_inds', []),dtype=int).to(self._device)
+        self.inds_neg = torch.tensor(self._cfg['train']['params']['network'].get('inds_neg',[]),dtype=int).to(self._device)
         return
 
     def set_up_scene(self, scene) -> None:
@@ -185,7 +187,7 @@ class AntBalanceTask(RLTask):
         self.obs_buf[:], self.xys[:], self.prev_xys[:], self.up_vec[:] = self.get_obs(
             torso_position, torso_rotation, velocity, ang_velocity, dof_pos, dof_vel, self.xys, self.dt, self.basis_vec1,
             self.dof_limits_lower, self.dof_limits_upper, self.dof_vel_scale, self.actions, self.angular_velocity_scale,
-            self.quats_legs, self.wood_positions, wood_orientations, wood_linvels, wood_angvels
+            self.quats_legs, self.wood_positions, wood_orientations, wood_linvels, wood_angvels, shared_agents_inds=self.shared_agents_inds, inds_neg=self.inds_neg
         )
         observations = {
             self._robots.name: {
@@ -259,12 +261,12 @@ class AntBalanceTask(RLTask):
 @torch.jit.script
 def get_dof_at_limit_cost(obs_buf, num_dof):
     # type: (Tensor, int) -> Tensor
-    if obs_buf.shape[-1] == 48:
+    if len(obs_buf.shape) == 2:
         return torch.sum(obs_buf[:, 12:12+num_dof] > 0.99, dim=-1)
-    elif obs_buf.shape[-1] == 109:
-        return torch.sum(obs_buf[:, 36:36+num_dof] > 0.99, dim=-1)
+    elif len(obs_buf.shape) == 3:
+        return torch.sum(obs_buf[:, 0, 12:12+num_dof] > 0.99, dim=-1)
     else:
-        assert False, f"observation shape {obs_buf.shape[-1]} not exist"
+        assert False, f"observation shape {obs_buf.shape} not exist"
 
 @torch.jit.script
 def normalize_angle(x):
@@ -290,9 +292,11 @@ def get_observations(
     wood_positions,
     wood_orientations,
     wood_linvels,
-    wood_angvels
+    wood_angvels,
+    inds_neg = torch.zeros([]),
+    shared_agents_inds = torch.zeros([])
 ):
-    # type: (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, float, Tensor, Tensor, Tensor, float, Tensor, float, Tensor, Tensor, Tensor, Tensor, Tensor) -> Tuple[Tensor, Tensor, Tensor, Tensor]
+    # type: (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, float, Tensor, Tensor, Tensor, float, Tensor, float, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor) -> Tuple[Tensor, Tensor, Tensor, Tensor]
 
     prev_xys = xys.clone()
     xys = torso_position[:,:2] / dt
@@ -344,7 +348,7 @@ def get_observations(
 
     return obs, xys, prev_xys, up_vec
 
-# @torch.jit.script
+@torch.jit.script
 def get_observations_masa(
     torso_position,
     torso_rotation,
@@ -364,9 +368,11 @@ def get_observations_masa(
     wood_positions,
     wood_orientations,
     wood_linvels,
-    wood_angvels
+    wood_angvels,
+    inds_neg = torch.zeros([]),
+    shared_agents_inds = torch.zeros([])
 ):
-    # type: (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, float, Tensor, Tensor, Tensor, float, Tensor, float, Tensor, Tensor, Tensor, Tensor, Tensor) -> Tuple[Tensor, Tensor, Tensor, Tensor]
+    # type: (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, float, Tensor, Tensor, Tensor, float, Tensor, float, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor) -> Tuple[Tensor, Tensor, Tensor, Tensor]
 
     prev_xys = xys.clone()
     xys = torso_position[:,:2] / dt
@@ -376,9 +382,10 @@ def get_observations_masa(
     angvel_locs = torch.zeros([num_batch,12], device=velocity.device, dtype=velocity.dtype)
     pitches = torch.zeros([num_batch,4], device=velocity.device, dtype=velocity.dtype)
     rolls = torch.zeros([num_batch,4], device=velocity.device, dtype=velocity.dtype)
-    up_proj = None
-    up_vec = None
+    up_proj = torch.zeros([num_batch,], device=velocity.device, dtype=velocity.dtype) 
+    up_vec = torch.zeros([num_batch,3], device=velocity.device, dtype=velocity.dtype)
     wood_pos_locs = torch.zeros([num_batch,12], device=velocity.device, dtype=velocity.dtype)
+    wood_up_vec_locs = torch.zeros([num_batch,12], device=velocity.device, dtype=velocity.dtype)
     wood_vel_locs = torch.zeros([num_batch,12], device=velocity.device, dtype=velocity.dtype)
     wood_angvel_locs = torch.zeros([num_batch,12], device=velocity.device, dtype=velocity.dtype)
     wood_roll_locs = torch.zeros([num_batch,4], device=velocity.device, dtype=velocity.dtype)
@@ -395,11 +402,14 @@ def get_observations_masa(
         angvel_locs[:,i*3:(i+1)*3] = angvel_loc
         pitches[:,i] = pitch
         rolls[:,i] = roll
-        if up_vec is None: up_vec = u_vec
-        if up_proj is None: up_proj = u_proj
+        up_vec = u_vec
+        up_proj = u_proj
         # wood
         wood_pos_locs[:,i*3:(i+1)*3] = quat_rotate_inverse(torso_r_leg, wood_positions-torso_position)
-        wood_roll_locs[:,i], wood_pitch_locs[:,i], _ = get_euler_xyz(quat_mul(quat_conjugate(torso_r_leg), wood_orientations))
+        wood_orientations_loc = quat_mul(quat_conjugate(torso_r_leg), wood_orientations)
+        wood_up_vec_loc = get_basis_vector(wood_orientations_loc, basis_vec1).view(num_batch, 3)
+        wood_up_vec_locs[:,i*3:(i+1)*3] = wood_up_vec_loc
+        wood_roll_locs[:,i], wood_pitch_locs[:,i], _ = get_euler_xyz(wood_orientations_loc)
         wood_vel_locs[:,i*3:(i+1)*3] = quat_rotate_inverse(torso_r_leg, wood_linvels)
         wood_angvel_locs[:,i*3:(i+1)*3] = quat_rotate_inverse(torso_r_leg, wood_angvels)
 
@@ -423,13 +433,16 @@ def get_observations_masa(
             wood_pos_locs,
             wood_vel_locs,
             wood_angvel_locs,
-            wood_roll_locs,
-            wood_pitch_locs
+            wood_up_vec_locs
         ),
         dim=-1,
     )
+    obs[:,inds_neg] = - obs[:,inds_neg]
+    obs_shared_agents = torch.zeros([obs.shape[0], len(shared_agents_inds), len(shared_agents_inds[0])], device=obs.device, dtype=obs.dtype)
+    for i in range(len(shared_agents_inds)):
+        obs_shared_agents[:,i] = obs[:, shared_agents_inds[i]]
 
-    return obs, xys, prev_xys, up_vec
+    return obs_shared_agents, xys, prev_xys, up_vec
 
 # @torch.jit.script
 def calculate_metrics(
@@ -457,17 +470,20 @@ def calculate_metrics(
 
     # energy penalty for movement
     actions_cost = torch.sum(actions ** 2, dim=-1)
-    if obs_buf.shape[-1] == 48:
+    if len(obs_buf.shape) == 2:
+        # reward for duration of staying alive
+        alive_reward = torch.ones_like(obs_buf[:,0]) * alive_reward_scale
         # up_reward = torch.where(obs_buf[:, 10] > 0.93, z_proj_wood * up_weight, up_reward)
         electricity_cost = torch.sum(torch.abs(actions * obs_buf[:, 12+num_dof:12+num_dof*2])* motor_effort_ratio.unsqueeze(0), dim=-1)
-    elif obs_buf.shape[-1] == 109:
+    elif len(obs_buf.shape) == 3:
+        # reward for duration of staying alive
+        alive_reward = torch.ones_like(obs_buf[:,0,0]) * alive_reward_scale
         # up_reward = torch.where(z_proj_wood > 0.93, up_reward + up_weight, up_reward)
-        electricity_cost = torch.sum(torch.abs(actions * obs_buf[:, 36+num_dof:36+num_dof*2])* motor_effort_ratio.unsqueeze(0), dim=-1)
+        electricity_cost = torch.sum(torch.abs(actions * obs_buf[:, 0, 12+num_dof:12+num_dof*2])* motor_effort_ratio.unsqueeze(0), dim=-1)
     else:
-        assert False, f"observation shape {obs_buf.shape[-1]} not exist"
+        assert False, f"observation shape {obs_buf.shape} not exist"
 
-    # reward for duration of staying alive
-    alive_reward = torch.ones_like(obs_buf[...,0]) * alive_reward_scale
+    
 
     target_tracking_reward = torch.exp(-torch.norm(xys, dim=-1)) * 0.1
 
