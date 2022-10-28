@@ -34,7 +34,7 @@ from omni.isaac.core.utils.torch.rotations import compute_up, compute_rot_notarg
 from omni.isaac.core.utils.torch.maths import torch_rand_float, tensor_clamp, unscale
 from omni.isaac.core.articulations import ArticulationView
 from omni.isaac.core.utils.prims import get_prim_at_path
-from omni.isaac.core.objects import DynamicSphere
+from omni.isaac.core.objects import DynamicSphere, DynamicCylinder
 from omni.isaac.core.prims import RigidPrimView
 
 from pxr import PhysxSchema
@@ -46,7 +46,7 @@ import math
 # rotate local coordinate system by local z axis for 0,90,180,270 degrees to project legs' observations to the same space
 QUATS_LEGS = torch.tensor([[[1,0,0,0]],[[0.7071068, 0, 0, 0.7071068]],[[0,0,0,1]],[[-0.7071068, 0, 0, 0.7071068]]])
 
-class AntBalanceTask(RLTask):
+class AntonBallTask(RLTask):
     def __init__(
         self,
         name,
@@ -60,8 +60,9 @@ class AntBalanceTask(RLTask):
         self._task_cfg = sim_config.task_config
         self._num_observations = self._cfg['train']['num_observations']
         self._num_actions = 8
-        self._ant_positions = torch.tensor([0, 0, 0.5])
-        self._wood_position = torch.tensor([0.0, 0.0, 1.05])
+        self._ant_positions = torch.tensor([0, 0, 2.5])
+        self._wood_position = torch.tensor([0.0, 0.0, 3.8])
+        self._ball_position = torch.tensor([0.,0.,1.05])
 
         self._num_envs = self._task_cfg["env"]["numEnvs"]
         self._env_spacing = self._task_cfg["env"]["envSpacing"]
@@ -101,25 +102,28 @@ class AntBalanceTask(RLTask):
         scene.add(self._ants)
         self._woods = RigidPrimView(prim_paths_expr="/World/envs/.*/Wood/wood", name="wood_view", reset_xform_properties=False)
         scene.add(self._woods)
+        self._balls = RigidPrimView(prim_paths_expr="/World/envs/.*/Ball/ball", name="ball_view", reset_xform_properties=False)
+        scene.add(self._balls)
         return
     
     def add_wood(self):
-        wood = DynamicSphere(
+        wood = DynamicCylinder(
             prim_path=self.default_zero_env_path + "/Wood/wood", 
             translation=self._wood_position, 
             name="wood_0",
-            radius = 0.3,
+            radius = 0.1,
+            height= 2.0,
             color=torch.tensor([0.9, 0.6, 0.2]),
         )
-        # wood = DynamicCylinder(
-        #     prim_path=self.default_zero_env_path + "/Wood/wood", 
-        #     translation=self._wood_position, 
-        #     name="wood_0",
-        #     radius = 0.1,
-        #     height= 4.0,
-        #     color=torch.tensor([0.9, 0.6, 0.2]),
-        # )
+        ball = DynamicSphere(
+            prim_path=self.default_zero_env_path + "/Ball/ball", 
+            translation=self._ball_position, 
+            name="ball_0",
+            radius = 1.,
+            color=torch.tensor([0.9, 0.6, 0.2]),
+        )
         self._sim_config.apply_articulation_settings("wood", get_prim_at_path(wood.prim_path), self._sim_config.parse_actor_config("wood"))
+        self._sim_config.apply_articulation_settings("ball", get_prim_at_path(ball.prim_path), self._sim_config.parse_actor_config("wood"))
 
     def get_ant(self):
         ant = Ant(prim_path=self.default_zero_env_path + "/Ant", name="Ant", translation=self._ant_positions)
@@ -139,6 +143,7 @@ class AntBalanceTask(RLTask):
         self.initial_root_pos, self.initial_root_rot = self._robots.get_world_poses()
         self.initial_dof_pos = self._robots.get_joint_positions()
         self.initial_wood_pos, self.initial_wood_rot = self._woods.get_world_poses()
+        self.initial_ball_pos, self.initial_ball_rot = self._balls.get_world_poses()
 
         # initialize some data used later on
         # self.start_rotation = torch.tensor([1, 0, 0, 0], device=self._device, dtype=torch.float32)
@@ -178,6 +183,14 @@ class AntBalanceTask(RLTask):
         wood_linvels = wood_velocities[:, 0:3]
         wood_angvels = wood_velocities[:, 3:6]
 
+        self.ball_positions, ball_orientations = self._balls.get_world_poses(clone=False)
+        self.ball_positions = self.ball_positions[:, 0:3] - self._env_pos
+        self.ball_up_vec = get_basis_vector(ball_orientations, self.basis_vec1).view(self.num_envs, 3)
+
+        ball_velocities = self._balls.get_velocities(clone=False)
+        ball_linvels = ball_velocities[:, 0:3]
+        ball_angvels = ball_velocities[:, 3:6]
+
         # slow down running from 210k fps to 2100 fps
         # poses_feet = [foot.get_world_poses(clone=False) for foot in self._feet]
         # poses_feet = [torch.cat(pose_foot, dim=-1) for pose_foot in poses_feet]
@@ -187,7 +200,7 @@ class AntBalanceTask(RLTask):
         self.obs_buf[:], self.xys[:], self.prev_xys[:], self.up_vec[:] = self.get_obs(
             torso_position, torso_rotation, velocity, ang_velocity, dof_pos, dof_vel, self.xys, self.dt, self.basis_vec1,
             self.dof_limits_lower, self.dof_limits_upper, self.dof_vel_scale, self.actions, self.angular_velocity_scale,
-            self.quats_legs, self.wood_positions, wood_orientations, wood_linvels, wood_angvels, shared_agents_inds=self.shared_agents_inds, inds_neg=self.inds_neg
+            self.quats_legs, self.wood_positions, wood_orientations, wood_linvels, wood_angvels, self.ball_positions, ball_orientations, ball_linvels, ball_angvels, shared_agents_inds=self.shared_agents_inds, inds_neg=self.inds_neg
         )
         observations = {
             self._robots.name: {
@@ -233,6 +246,11 @@ class AntBalanceTask(RLTask):
         self._woods.set_world_poses(root_pos_wood, root_rot_wood, indices=env_ids)
         wood_vel = torch.zeros((num_resets, 6), device=self._device)
         self._woods.set_velocities(wood_vel, indices=env_ids)
+
+        root_pos_ball, root_rot_ball = self.initial_ball_pos[env_ids], self.initial_ball_rot[env_ids]
+        self._balls.set_world_poses(root_pos_ball, root_rot_ball, indices=env_ids)
+        ball_vel = torch.zeros((num_resets, 6), device=self._device)
+        self._balls.set_velocities(ball_vel, indices=env_ids)
 
         self.prev_xys[env_ids] = self.initial_root_pos[env_ids,:2] / self.dt
         self.xys[env_ids] = self.prev_xys[env_ids].clone()
@@ -293,10 +311,14 @@ def get_observations(
     wood_orientations,
     wood_linvels,
     wood_angvels,
+    ball_positions,
+    ball_orientations,
+    ball_linvels,
+    ball_angvels,
     inds_neg = torch.zeros([]),
     shared_agents_inds = torch.zeros([])
 ):
-    # type: (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, float, Tensor, Tensor, Tensor, float, Tensor, float, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor) -> Tuple[Tensor, Tensor, Tensor, Tensor]
+    # type: (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, float, Tensor, Tensor, Tensor, float, Tensor, float, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor) -> Tuple[Tensor, Tensor, Tensor, Tensor]
 
     prev_xys = xys.clone()
     xys = torso_position[:,:2] / dt
@@ -321,6 +343,14 @@ def get_observations(
     wood_vel_loc = quat_rotate_inverse(torso_quat, wood_linvels)
     wood_angvel_loc = quat_rotate_inverse(torso_quat, wood_angvels)
 
+    # ball
+    ball_pos_loc = quat_rotate_inverse(torso_quat, ball_positions-torso_position)
+    ball_orientations_loc = quat_mul(quat_conjugate(torso_quat), ball_orientations)
+    ball_up_vec_loc = get_basis_vector(ball_orientations_loc, basis_vec1).view(num_batch, 3)
+    ball_roll_loc, ball_pitch_loc, _ = get_euler_xyz(ball_orientations_loc)
+    ball_vel_loc = quat_rotate_inverse(torso_quat, ball_linvels)
+    ball_angvel_loc = quat_rotate_inverse(torso_quat, ball_angvels)
+
 
     dof_pos_scaled = unscale(dof_pos, dof_limits_lower, dof_limits_upper)
 
@@ -341,7 +371,11 @@ def get_observations(
             wood_pos_loc,
             wood_vel_loc,
             wood_angvel_loc,
-            wood_up_vec_loc
+            wood_up_vec_loc,
+            ball_pos_loc,
+            ball_vel_loc,
+            ball_angvel_loc,
+            ball_up_vec_loc
         ),
         dim=-1,
     )
@@ -369,10 +403,14 @@ def get_observations_masa(
     wood_orientations,
     wood_linvels,
     wood_angvels,
+    ball_positions,
+    ball_orientations,
+    ball_linvels,
+    ball_angvels,
     inds_neg = torch.zeros([]),
     shared_agents_inds = torch.zeros([])
 ):
-    # type: (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, float, Tensor, Tensor, Tensor, float, Tensor, float, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor) -> Tuple[Tensor, Tensor, Tensor, Tensor]
+    # type: (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, float, Tensor, Tensor, Tensor, float, Tensor, float, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor) -> Tuple[Tensor, Tensor, Tensor, Tensor]
 
     prev_xys = xys.clone()
     xys = torso_position[:,:2] / dt
@@ -382,14 +420,16 @@ def get_observations_masa(
     angvel_locs = torch.zeros([num_batch,12], device=velocity.device, dtype=velocity.dtype)
     pitches = torch.zeros([num_batch,4], device=velocity.device, dtype=velocity.dtype)
     rolls = torch.zeros([num_batch,4], device=velocity.device, dtype=velocity.dtype)
-    up_proj = torch.zeros([num_batch,], device=velocity.device, dtype=velocity.dtype) 
-    up_vec = torch.zeros([num_batch,3], device=velocity.device, dtype=velocity.dtype)
+    up_proj = None
+    up_vec = None
     wood_pos_locs = torch.zeros([num_batch,12], device=velocity.device, dtype=velocity.dtype)
-    wood_up_vec_locs = torch.zeros([num_batch,12], device=velocity.device, dtype=velocity.dtype)
     wood_vel_locs = torch.zeros([num_batch,12], device=velocity.device, dtype=velocity.dtype)
+    wood_up_vec_locs = torch.zeros([num_batch,12], device=velocity.device, dtype=velocity.dtype)
     wood_angvel_locs = torch.zeros([num_batch,12], device=velocity.device, dtype=velocity.dtype)
-    wood_roll_locs = torch.zeros([num_batch,4], device=velocity.device, dtype=velocity.dtype)
-    wood_pitch_locs = torch.zeros([num_batch,4], device=velocity.device, dtype=velocity.dtype)
+    ball_pos_locs = torch.zeros([num_batch,12], device=velocity.device, dtype=velocity.dtype)
+    ball_vel_locs = torch.zeros([num_batch,12], device=velocity.device, dtype=velocity.dtype)
+    ball_up_vec_locs = torch.zeros([num_batch,12], device=velocity.device, dtype=velocity.dtype)
+    ball_angvel_locs = torch.zeros([num_batch,12], device=velocity.device, dtype=velocity.dtype)
     for i,quat_leg in enumerate(quats_legs):
         torso_r_leg = quat_mul(torso_rotation, quat_leg)
         torso_quat_leg, u_proj, u_vec = compute_up(
@@ -402,16 +442,22 @@ def get_observations_masa(
         angvel_locs[:,i*3:(i+1)*3] = angvel_loc
         pitches[:,i] = pitch
         rolls[:,i] = roll
-        up_vec = u_vec
-        up_proj = u_proj
+        if up_vec is None: up_vec = u_vec
+        if up_proj is None: up_proj = u_proj
         # wood
         wood_pos_locs[:,i*3:(i+1)*3] = quat_rotate_inverse(torso_r_leg, wood_positions-torso_position)
         wood_orientations_loc = quat_mul(quat_conjugate(torso_r_leg), wood_orientations)
         wood_up_vec_loc = get_basis_vector(wood_orientations_loc, basis_vec1).view(num_batch, 3)
         wood_up_vec_locs[:,i*3:(i+1)*3] = wood_up_vec_loc
-        wood_roll_locs[:,i], wood_pitch_locs[:,i], _ = get_euler_xyz(wood_orientations_loc)
         wood_vel_locs[:,i*3:(i+1)*3] = quat_rotate_inverse(torso_r_leg, wood_linvels)
         wood_angvel_locs[:,i*3:(i+1)*3] = quat_rotate_inverse(torso_r_leg, wood_angvels)
+        # ball
+        ball_pos_locs[:,i*3:(i+1)*3] = quat_rotate_inverse(torso_r_leg, ball_positions-torso_position)
+        ball_orientations_loc = quat_mul(quat_conjugate(torso_r_leg), ball_orientations)
+        ball_up_vec_loc = get_basis_vector(ball_orientations_loc, basis_vec1).view(num_batch, 3)
+        ball_up_vec_locs[:,i*3:(i+1)*3] = ball_up_vec_loc
+        ball_vel_locs[:,i*3:(i+1)*3] = quat_rotate_inverse(torso_r_leg, ball_linvels)
+        ball_angvel_locs[:,i*3:(i+1)*3] = quat_rotate_inverse(torso_r_leg, ball_angvels)
 
 
     dof_pos_scaled = unscale(dof_pos, dof_limits_lower, dof_limits_upper)
@@ -433,7 +479,11 @@ def get_observations_masa(
             wood_pos_locs,
             wood_vel_locs,
             wood_angvel_locs,
-            wood_up_vec_locs
+            wood_up_vec_locs,
+            ball_pos_locs,
+            ball_vel_locs,
+            ball_angvel_locs,
+            ball_up_vec_locs,
         ),
         dim=-1,
     )
@@ -483,8 +533,6 @@ def calculate_metrics(
     else:
         assert False, f"observation shape {obs_buf.shape} not exist"
 
-    
-
     target_tracking_reward = torch.exp(-torch.norm(xys, dim=-1)) * 0.1
 
     total_reward = (
@@ -499,7 +547,7 @@ def calculate_metrics(
 
     # adjust reward for fallen agents
     total_reward = torch.where(
-        z_woods < 0.65, torch.ones_like(total_reward) * death_cost, total_reward
+        torch.logical_or(z_proj_wood < 0.8, z_woods < 3.3), torch.ones_like(total_reward) * death_cost, total_reward
     )
     return total_reward
 
@@ -514,6 +562,6 @@ def is_done(
     z_proj_wood
 ):
     # type: (Tensor, float, Tensor, Tensor, float, Tensor, Tensor) -> Tensor
-    reset = torch.where(z_woods < 0.65, torch.ones_like(reset_buf), reset_buf)
+    reset = torch.where(torch.logical_or(z_proj_wood < 0.8, z_woods < 3.3), torch.ones_like(reset_buf), reset_buf)
     reset = torch.where(progress_buf >= max_episode_length - 1, torch.ones_like(reset_buf), reset)
     return reset
