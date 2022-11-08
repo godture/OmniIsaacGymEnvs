@@ -28,7 +28,7 @@ env:
   contactForceScale: 0.01
   jointsAtLimitCost: 0.25
   deathCost: -1.0
-  terminationHeight: 1.8
+  terminationHeight: 1.7
   alive_reward_scale: 2.0
 
 sim:

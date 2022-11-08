@@ -38,6 +38,7 @@ def initialize_task(config, env, init_sim=True):
     from omniisaacgymenvs.tasks.cartpole import CartpoleTask
     from omniisaacgymenvs.tasks.franka_cabinet import FrankaCabinetTask
     from omniisaacgymenvs.tasks.humanoid import HumanoidLocomotionTask
+    from omniisaacgymenvs.tasks.humanoid_balance_beam import HumanoidBBTask
     from omniisaacgymenvs.tasks.ingenuity import IngenuityTask
     from omniisaacgymenvs.tasks.quadcopter import QuadcopterTask
     from omniisaacgymenvs.tasks.shadow_hand import ShadowHandTask
@@ -55,6 +56,7 @@ def initialize_task(config, env, init_sim=True):
         "Cartpole": CartpoleTask,
         "FrankaCabinet": FrankaCabinetTask,
         "Humanoid": HumanoidLocomotionTask,
+        "HumanoidBB": HumanoidBBTask,
         "Ingenuity": IngenuityTask,
         "Quadcopter": QuadcopterTask,
         "Crazyflie": CrazyflieTask,

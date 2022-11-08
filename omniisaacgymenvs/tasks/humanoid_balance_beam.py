@@ -170,7 +170,7 @@ class HumanoidBBTask(RLTask):
 
         self.target_dirs = torch.tensor([1, 0, 0], dtype=torch.float32, device=self._device).repeat((self.num_envs, 1))
         self.dt = 1.0 / 60.0
-        self.xys = self.initial_root_pos[...,:2] / self.dt # self.torch.tensor([-1000.0 / self.dt], dtype=torch.float32, device=self._device).repeat(self.num_envs)
+        self.xys = (self.initial_root_pos[...,:2] - self._env_pos[:,:2]) / self.dt # self.torch.tensor([-1000.0 / self.dt], dtype=torch.float32, device=self._device).repeat(self.num_envs)
         self.prev_xys = self.xys.clone()
 
         self.actions = torch.zeros((self.num_envs, self.num_actions), device=self._device)
@@ -181,6 +181,7 @@ class HumanoidBBTask(RLTask):
 
     def get_observations(self) -> dict:
         torso_position, torso_rotation = self._robots.get_world_poses(clone=False)
+        torso_position = torso_position - self._env_pos
         velocities = self._robots.get_velocities(clone=False)
         velocity = velocities[:, 0:3]
         ang_velocity = velocities[:, 3:6]
@@ -240,7 +241,7 @@ class HumanoidBBTask(RLTask):
         self._robots.set_world_poses(root_pos, root_rot, indices=env_ids)
         self._robots.set_velocities(root_vel, indices=env_ids)
 
-        self.prev_xys[env_ids] = self.initial_root_pos[env_ids,:2] / self.dt #-torch.norm(to_target, p=2, dim=-1) / self.dt
+        self.prev_xys[env_ids] = (self.initial_root_pos[env_ids,:2] - self._env_pos[env_ids,:2]) / self.dt #-torch.norm(to_target, p=2, dim=-1) / self.dt
         self.xys[env_ids] = self.prev_xys[env_ids].clone()
 
         # bookkeeping
