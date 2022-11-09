@@ -26,8 +26,8 @@ env:
   control:
     # TODO: adjust according to a1
     # PD Drive parameters:
-    stiffness: 85.0  # [N*m/rad]
-    damping: 2.0     # [N*m*s/rad]
+    stiffness: 40.0  # [N*m/rad]
+    damping: 0.6     # [N*m*s/rad]
     actionScale: 13.5
 
   defaultJointAngles:  # = target angles when action = 0.0
@@ -35,10 +35,10 @@ env:
     FR_hip_joint: -0.03
     RL_hip_joint: 0.03
     RR_hip_joint: -0.03
-    FL_thigh_joint: 0 #1.57 robot fly away and die with big initial joint movement
-    FR_thigh_joint: 0 #1.57
-    RL_thigh_joint: 0 #1.57
-    RR_thigh_joint: 0 #1.57
+    FL_thigh_joint: 0.4 #1.57 robot fly away and die with big initial joint movement
+    FR_thigh_joint: 0.4 #1.57
+    RL_thigh_joint: 0.4 #1.57
+    RR_thigh_joint: 0.4 #1.57
     FL_calf_joint: -0.92 #1.74
     FR_calf_joint: -0.92 #1.74
     RL_calf_joint: -0.92 #1.74

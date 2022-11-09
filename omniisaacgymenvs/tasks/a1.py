@@ -149,6 +149,11 @@ class A1Task(RLTask):
         base_ang_vel = quat_rotate_inverse(torso_rotation, ang_velocity) * self.ang_vel_scale
         projected_gravity = quat_rotate(torso_rotation, self.gravity_vec)
         dof_pos_scaled = (dof_pos - self.default_dof_pos) * self.dof_pos_scale
+        roll, pitch, yaw = get_euler_xyz(torso_rotation)
+        self.heading_vec = get_basis_vector(torso_rotation, self.basis_vec0).view(-1,3)
+        self.up_vec = get_basis_vector(torso_rotation, self.basis_vec1).view(-1,3)
+        self.prev_xys = self.xys.clone()
+        self.xys = torso_position[:,:2] / self.dt
 
         commands_scaled = self.commands * torch.tensor(
             [self.lin_vel_scale, self.lin_vel_scale, self.ang_vel_scale],
@@ -161,7 +166,10 @@ class A1Task(RLTask):
                 base_lin_vel,
                 base_ang_vel,
                 projected_gravity,
-                commands_scaled,
+                normalize_angle(yaw).unsqueeze(-1),
+                normalize_angle(pitch).unsqueeze(-1),
+                normalize_angle(roll).unsqueeze(-1),
+                # commands_scaled,
                 dof_pos_scaled,
                 dof_vel * self.dof_vel_scale,
                 self.actions,
@@ -228,6 +236,9 @@ class A1Task(RLTask):
         self.last_actions[env_ids] = 0.
         self.last_dof_vel[env_ids] = 0.
 
+        self.prev_xys[env_ids] = (self.initial_root_pos[env_ids,:2] - self._env_pos[env_ids,:2]) / self.dt #-torch.norm(to_target, p=2, dim=-1) / self.dt
+        self.xys[env_ids] = self.prev_xys[env_ids].clone()
+
     def post_reset(self):
         self.initial_root_pos, self.initial_root_rot = self._a1s.get_world_poses()
         self.current_targets = self.default_dof_pos.clone()
@@ -251,8 +262,12 @@ class A1Task(RLTask):
         )
         self.last_dof_vel = torch.zeros((self._num_envs, 12), dtype=torch.float, device=self._device, requires_grad=False)
         self.last_actions = torch.zeros(self._num_envs, self.num_actions, dtype=torch.float, device=self._device, requires_grad=False)
+        self.heading_vec = torch.tensor([1, 0, 0], dtype=torch.float32, device=self._device).repeat((self.num_envs, 1))
         self.up_vec = torch.tensor([0, 0, 1], dtype=torch.float32, device=self._device).repeat((self.num_envs, 1))
+        self.basis_vec0 = self.heading_vec.clone()
         self.basis_vec1 = self.up_vec.clone()
+        self.xys = (self.initial_root_pos[...,:2] - self._env_pos[:,:2]) / self.dt # self.torch.tensor([-1000.0 / self.dt], dtype=torch.float32, device=self._device).repeat(self.num_envs)
+        self.prev_xys = self.xys.clone()
 
         self.time_out_buf = torch.zeros_like(self.reset_buf)
 
@@ -283,7 +298,25 @@ class A1Task(RLTask):
         rew_action_rate = torch.sum(torch.square(self.last_actions - self.actions), dim=1) * self.rew_scales["action_rate"]
         rew_cosmetic = torch.sum(torch.abs(dof_pos[:, 0:4] - self.default_dof_pos[:, 0:4]), dim=1) * self.rew_scales["cosmetic"]
 
-        total_reward = rew_lin_vel_xy + rew_ang_vel_z + rew_joint_acc  + rew_action_rate + rew_cosmetic + rew_lin_vel_z
+        # total_reward = rew_lin_vel_xy + rew_ang_vel_z + rew_joint_acc  + rew_action_rate + rew_cosmetic + rew_lin_vel_z
+        heading_reward = self.heading_vec[:,0] * 0.5
+        up_reward = self.up_vec[:,2] * 0.5
+        headup_cost = torch.abs(self.heading_vec[:,2]) * 0.5
+        actions_cost = torch.sum(self.actions ** 2, dim=-1) * 0.1
+        alive_reward = torch.ones_like(heading_reward) * 1.0
+        progress_reward = self.xys[:,0] - self.prev_xys[:,0]
+        off_track_cost = torch.abs(self.xys[:,1] - self.prev_xys[:,1])
+        total_reward = (
+            progress_reward
+            + alive_reward
+            + up_reward
+            + heading_reward
+            - headup_cost
+            - actions_cost
+            # - energy_cost_scale * electricity_cost
+            # - dof_at_limit_cost
+            - off_track_cost
+        )
         total_reward = torch.clip(total_reward, 0.0, None)
 
         self.last_actions[:] = self.actions[:]
@@ -292,7 +325,7 @@ class A1Task(RLTask):
         # self.fallen_over = self._a1s.is_base_below_threshold(threshold=0.51, ground_heights=0.0)
         base_pos, base_quat = self._a1s.get_world_poses()
         up_vec = get_basis_vector(base_quat, self.basis_vec1)
-        self.fallen_over =  up_vec[:,2] < 0
+        self.fallen_over =  (up_vec[:,2] < 0.6) | (base_pos[:,2] < 0.2)
         total_reward[torch.nonzero(self.fallen_over)] = -1
         self.rew_buf[:] = total_reward.detach()
 
@@ -302,3 +335,6 @@ class A1Task(RLTask):
         time_out = self.progress_buf >= self.max_episode_length - 1
         self.reset_buf[:] = time_out | self.fallen_over
 
+@torch.jit.script
+def normalize_angle(x):
+    return torch.atan2(torch.sin(x), torch.cos(x))
