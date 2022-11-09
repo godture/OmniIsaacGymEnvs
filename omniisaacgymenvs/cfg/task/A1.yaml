@@ -24,6 +24,7 @@ env:
     yaw: [-1., 1.]          # min max [rad/s]
 
   control:
+    # TODO: adjust according to a1
     # PD Drive parameters:
     stiffness: 85.0  # [N*m/rad]
     damping: 2.0     # [N*m*s/rad]
@@ -34,28 +35,14 @@ env:
     FR_hip_joint: -0.03
     RL_hip_joint: 0.03
     RR_hip_joint: -0.03
-    FL_thigh_joint: 1.57
-    FR_thigh_joint: 1.57
-    RL_thigh_joint: 1.57
-    RR_thigh_joint: 1.57
-    FL_calf_joint: 1.74
-    FR_calf_joint: 1.74
-    RL_calf_joint: 1.74
-    RR_calf_joint: 1.74
-    # LF_HAA: 0.03    # [rad]
-    # LH_HAA: 0.03    # [rad]
-    # RF_HAA: -0.03   # [rad]
-    # RH_HAA: -0.03   # [rad]
-
-    # LF_HFE: 0.4     # [rad]
-    # LH_HFE: -0.4    # [rad]
-    # RF_HFE: 0.4     # [rad]
-    # RH_HFE: -0.4    # [rad]
-
-    # LF_KFE: -0.8    # [rad]
-    # LH_KFE: 0.8     # [rad]
-    # RF_KFE: -0.8    # [rad]
-    # RH_KFE: 0.8     # [rad]
+    FL_thigh_joint: 0 #1.57 robot fly away and die with big initial joint movement
+    FR_thigh_joint: 0 #1.57
+    RL_thigh_joint: 0 #1.57
+    RR_thigh_joint: 0 #1.57
+    FL_calf_joint: -0.92 #1.74
+    FR_calf_joint: -0.92 #1.74
+    RL_calf_joint: -0.92 #1.74
+    RR_calf_joint: -0.92 #1.74
 
   learn:
     # rewards
@@ -118,7 +105,7 @@ sim:
     gpu_temp_buffer_capacity: 33554432
     gpu_max_num_partitions: 8
 
-  Anymal:
+  A1:
     # -1 to use default values
     override_usd_defaults: False
     fixed_base: False

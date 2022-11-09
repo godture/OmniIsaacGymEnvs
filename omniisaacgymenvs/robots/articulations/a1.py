@@ -55,10 +55,12 @@ class A1(Robot):
         self._name = name
 
         if self._usd_path is None:
-            assets_root_path = get_assets_root_path()
-            if assets_root_path is None:
-                carb.log_error("Could not find nucleus server with /Isaac folder")
-            self._usd_path = assets_root_path + "/Isaac/Robots/Unitree/a1.usd"
+            # assets_root_path = get_assets_root_path()
+            # if assets_root_path is None:
+            #     carb.log_error("Could not find nucleus server with /Isaac folder")
+            # self._usd_path = assets_root_path + "/Isaac/Robots/Unitree/a1.usd"
+            # strange, does not work when articulation root on default prim
+            self._usd_path = "omniverse://localhost/Users/godture/a1_articulation.usd"
         add_reference_to_stage(self._usd_path, prim_path)
 
         super().__init__(
@@ -69,22 +71,22 @@ class A1(Robot):
             articulation_controller=None,
         )
 
-    #     self._dof_names = ["LF_HAA",
-    #                        "LH_HAA",
-    #                        "RF_HAA",
-    #                        "RH_HAA",
-    #                        "LF_HFE",
-    #                        "LH_HFE",
-    #                        "RF_HFE",
-    #                        "RH_HFE",
-    #                        "LF_KFE",
-    #                        "LH_KFE",
-    #                        "RF_KFE",
-    #                        "RH_KFE"]
+        self._dof_names = ["FL_hip_joint",
+                           "FR_hip_joint",
+                           "RL_hip_joint",
+                           "RR_hip_joint",
+                           "FL_thigh_joint",
+                           "FR_thigh_joint",
+                           "RL_thigh_joint",
+                           "RR_thigh_joint",
+                           "FL_calf_joint",
+                           "FR_calf_joint",
+                           "RL_calf_joint",
+                           "RR_calf_joint"]
 
-    # @property
-    # def dof_names(self):
-    #     return self._dof_names
+    @property
+    def dof_names(self):
+        return self._dof_names
 
     # def set_anymal_properties(self, stage, prim):
     #     for link_prim in prim.GetChildren():

@@ -96,7 +96,7 @@ class A1Task(RLTask):
             self.rew_scales[key] *= self.dt
 
         self._num_envs = self._task_cfg["env"]["numEnvs"]
-        self._a1_translation = torch.tensor([0.0, 0.0, 0.62])
+        self._a1_translation = torch.tensor([0.0, 0.0, 0.42])
         self._env_spacing = self._task_cfg["env"]["envSpacing"]
         self._num_observations = 48
         self._num_actions = 12
@@ -107,10 +107,10 @@ class A1Task(RLTask):
     def set_up_scene(self, scene) -> None:
         self.get_a1()
         super().set_up_scene(scene)
-        self._anymals = ArticulationView(prim_paths_expr="/World/envs/.*/anymal", name="a1_view", reset_xform_properties=False)
-        scene.add(self._anymals)
-        scene.add(self._anymals._knees)
-        scene.add(self._anymals._base)
+        self._a1s = ArticulationView(prim_paths_expr="/World/envs/.*/a1/trunk", name="a1_view", reset_xform_properties=False)
+        scene.add(self._a1s)
+        # scene.add(self._a1s._knees)
+        # scene.add(self._a1s._base)
 
         return
 
@@ -120,26 +120,27 @@ class A1Task(RLTask):
 
         # Configure joint properties
         joint_paths = []
-        for quadrant in ["LF", "LH", "RF", "RH"]:
-            for component, abbrev in [("HIP", "H"), ("THIGH", "K")]:
-                joint_paths.append(f"{quadrant}_{component}/{quadrant}_{abbrev}FE")
-            joint_paths.append(f"base/{quadrant}_HAA")
+        for quadrant in ["FL", "RL", "FR", "RR"]:
+            joint_paths.append(f"trunk/{quadrant}_hip_joint")
+            for component, sub_component in [("hip", "thigh"), ("thigh", "calf")]:
+                joint_paths.append(f"{quadrant}_{component}/{quadrant}_{sub_component}_joint")
         for joint_path in joint_paths:
-            # TODO: adjust this for a1
-            set_drive(f"{anymal.prim_path}/{joint_path}", "angular", "position", 0, 400, 40, 1000)
+            # TODO: adjust the values for a1
+            set_drive(f"{a1.prim_path}/{joint_path}", "angular", "position", 0, 400, 40, 1000)
 
         self.default_dof_pos = torch.zeros((self.num_envs, 12), dtype=torch.float, device=self.device, requires_grad=False)
-        dof_names = anymal.dof_names
+        dof_names = a1.dof_names
         for i in range(self.num_actions):
             name = dof_names[i]
             angle = self.named_default_joint_angles[name]
+            # TODO: check the order of these default dof pos
             self.default_dof_pos[:, i] = angle
 
     def get_observations(self) -> dict:
-        torso_position, torso_rotation = self._anymals.get_world_poses(clone=False)
-        root_velocities = self._anymals.get_velocities(clone=False)
-        dof_pos = self._anymals.get_joint_positions(clone=False)
-        dof_vel = self._anymals.get_joint_velocities(clone=False)
+        torso_position, torso_rotation = self._a1s.get_world_poses(clone=False)
+        root_velocities = self._a1s.get_velocities(clone=False)
+        dof_pos = self._a1s.get_joint_positions(clone=False)
+        dof_vel = self._a1s.get_joint_velocities(clone=False)
 
         velocity = root_velocities[:, 0:3]
         ang_velocity = root_velocities[:, 3:6]
@@ -170,7 +171,7 @@ class A1Task(RLTask):
         self.obs_buf[:] = obs
 
         observations = {
-            self._anymals.name: {
+            self._a1s.name: {
                 "obs_buf": self.obs_buf
             }
         }
@@ -181,16 +182,21 @@ class A1Task(RLTask):
         if len(reset_env_ids) > 0:
             self.reset_idx(reset_env_ids)
 
-        indices = torch.arange(self._anymals.count, dtype=torch.int32, device=self._device)
+        indices = torch.arange(self._a1s.count, dtype=torch.int32, device=self._device)
         self.actions[:] = actions.clone().to(self._device)
         current_targets = self.current_targets + self.action_scale * self.actions * self.dt 
-        self.current_targets[:] = torch.clamp(current_targets, self.anymal_dof_lower_limits, self.anymal_dof_upper_limits)
-        self._anymals.set_joint_position_targets(self.current_targets, indices)
+        self.current_targets[:] = torch.clamp(current_targets, self.a1_dof_lower_limits, self.a1_dof_upper_limits)
+        self._a1s.set_joint_position_targets(self.current_targets, indices)
+        # forces = torch.ones_like(actions, device=self._device)*0.
+        # forces[:,0] = 50.
+        # self._a1s.set_joint_efforts(forces, indices=indices)
+        # poses = torch.tensor([0,0,0,0,0,0,0,0,-0.92,-0.92,-0.92,-1.5], dtype=current_targets.dtype, device=current_targets.device)
+        # self._a1s.set_joint_position_targets(poses, indices)
 
     def reset_idx(self, env_ids):
         num_resets = len(env_ids)
         # randomize DOF velocities
-        velocities = torch_rand_float(-0.1, 0.1, (num_resets, self._anymals.num_dof), device=self._device)
+        velocities = torch_rand_float(-0.1, 0.1, (num_resets, self._a1s.num_dof), device=self._device)
         dof_pos = self.default_dof_pos[env_ids]
         dof_vel = velocities
 
@@ -200,11 +206,11 @@ class A1Task(RLTask):
 
         # apply resets
         indices = env_ids.to(dtype=torch.int32)
-        self._anymals.set_joint_positions(dof_pos, indices)
-        self._anymals.set_joint_velocities(dof_vel, indices)
+        self._a1s.set_joint_positions(dof_pos, indices)
+        self._a1s.set_joint_velocities(dof_vel, indices)
 
-        self._anymals.set_world_poses(self.initial_root_pos[env_ids].clone(), self.initial_root_rot[env_ids].clone(), indices)
-        self._anymals.set_velocities(root_vel, indices)
+        self._a1s.set_world_poses(self.initial_root_pos[env_ids].clone(), self.initial_root_rot[env_ids].clone(), indices)
+        self._a1s.set_velocities(root_vel, indices)
 
         self.commands_x[env_ids] = torch_rand_float(
             self.command_x_range[0], self.command_x_range[1], (num_resets, 1), device=self._device
@@ -223,12 +229,12 @@ class A1Task(RLTask):
         self.last_dof_vel[env_ids] = 0.
 
     def post_reset(self):
-        self.initial_root_pos, self.initial_root_rot = self._anymals.get_world_poses()
+        self.initial_root_pos, self.initial_root_rot = self._a1s.get_world_poses()
         self.current_targets = self.default_dof_pos.clone()
 
-        dof_limits = self._anymals.get_dof_limits()
-        self.anymal_dof_lower_limits = dof_limits[0, :, 0].to(device=self._device)
-        self.anymal_dof_upper_limits = dof_limits[0, :, 1].to(device=self._device)
+        dof_limits = self._a1s.get_dof_limits()
+        self.a1_dof_lower_limits = dof_limits[0, :, 0].to(device=self._device)
+        self.a1_dof_upper_limits = dof_limits[0, :, 1].to(device=self._device)
 
         self.commands = torch.zeros(self._num_envs, 3, dtype=torch.float, device=self._device, requires_grad=False)
         self.commands_y = self.commands.view(self._num_envs, 3)[..., 1]
@@ -245,18 +251,20 @@ class A1Task(RLTask):
         )
         self.last_dof_vel = torch.zeros((self._num_envs, 12), dtype=torch.float, device=self._device, requires_grad=False)
         self.last_actions = torch.zeros(self._num_envs, self.num_actions, dtype=torch.float, device=self._device, requires_grad=False)
+        self.up_vec = torch.tensor([0, 0, 1], dtype=torch.float32, device=self._device).repeat((self.num_envs, 1))
+        self.basis_vec1 = self.up_vec.clone()
 
         self.time_out_buf = torch.zeros_like(self.reset_buf)
 
         # randomize all envs
-        indices = torch.arange(self._anymals.count, dtype=torch.int64, device=self._device)
+        indices = torch.arange(self._a1s.count, dtype=torch.int64, device=self._device)
         self.reset_idx(indices)
 
     def calculate_metrics(self) -> None:
-        torso_position, torso_rotation = self._anymals.get_world_poses(clone=False)
-        root_velocities = self._anymals.get_velocities(clone=False)
-        dof_pos = self._anymals.get_joint_positions(clone=False)
-        dof_vel = self._anymals.get_joint_velocities(clone=False)
+        torso_position, torso_rotation = self._a1s.get_world_poses(clone=False)
+        root_velocities = self._a1s.get_velocities(clone=False)
+        dof_pos = self._a1s.get_joint_positions(clone=False)
+        dof_vel = self._a1s.get_joint_velocities(clone=False)
 
         velocity = root_velocities[:, 0:3]
         ang_velocity = root_velocities[:, 3:6]
@@ -281,7 +289,10 @@ class A1Task(RLTask):
         self.last_actions[:] = self.actions[:]
         self.last_dof_vel[:] = dof_vel[:]
 
-        self.fallen_over = self._anymals.is_base_below_threshold(threshold=0.51, ground_heights=0.0)
+        # self.fallen_over = self._a1s.is_base_below_threshold(threshold=0.51, ground_heights=0.0)
+        base_pos, base_quat = self._a1s.get_world_poses()
+        up_vec = get_basis_vector(base_quat, self.basis_vec1)
+        self.fallen_over =  up_vec[:,2] < 0
         total_reward[torch.nonzero(self.fallen_over)] = -1
         self.rew_buf[:] = total_reward.detach()
 
