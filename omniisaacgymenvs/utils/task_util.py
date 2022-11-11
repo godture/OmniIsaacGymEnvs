@@ -28,6 +28,7 @@
 
 
 def initialize_task(config, env, init_sim=True):
+    from omniisaacgymenvs.tasks.a1 import A1Task
     from omniisaacgymenvs.tasks.allegro_hand import AllegroHandTask
     from omniisaacgymenvs.tasks.ant import AntLocomotionTask
     from omniisaacgymenvs.tasks.ant_balance_bar import AntBalanceTask
@@ -46,6 +47,7 @@ def initialize_task(config, env, init_sim=True):
     
     # Mappings from strings to environments
     task_map = {
+        "A1": A1Task,
         "AllegroHand": AllegroHandTask,
         "Ant": AntLocomotionTask,
         "AntBalance": AntBalanceTask,

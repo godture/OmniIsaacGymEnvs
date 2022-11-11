@@ -98,10 +98,18 @@ class A1Task(RLTask):
         self._num_envs = self._task_cfg["env"]["numEnvs"]
         self._a1_translation = torch.tensor([0.0, 0.0, 0.42])
         self._env_spacing = self._task_cfg["env"]["envSpacing"]
-        self._num_observations = 48
+        self._num_observations = self._cfg['train']['num_observations']
         self._num_actions = 12
 
         RLTask.__init__(self, name, env)
+        if 'masa' in self._cfg['train']['params']['network']['name']:
+            self.get_observations = self.get_obs_masa
+        else:
+            self.get_observations = self.get_obs
+        self.inds_neg = torch.tensor(self._cfg['train']['params']['network'].get('inds_neg', []),dtype=int).to(self._device)
+        self.left_inds = torch.tensor(self._cfg['train']['params']['network'].get('left_inds', []),dtype=int).to(self._device)
+        self.left_inds_neg = torch.tensor(self._cfg['train']['params']['network'].get('left_inds_neg', []),dtype=int).to(self._device)
+        
         return
 
     def set_up_scene(self, scene) -> None:
@@ -136,7 +144,7 @@ class A1Task(RLTask):
             # TODO: check the order of these default dof pos
             self.default_dof_pos[:, i] = angle
 
-    def get_observations(self) -> dict:
+    def get_obs(self) -> dict:
         torso_position, torso_rotation = self._a1s.get_world_poses(clone=False)
         root_velocities = self._a1s.get_velocities(clone=False)
         dof_pos = self._a1s.get_joint_positions(clone=False)
@@ -147,7 +155,7 @@ class A1Task(RLTask):
 
         base_lin_vel = quat_rotate_inverse(torso_rotation, velocity) * self.lin_vel_scale
         base_ang_vel = quat_rotate_inverse(torso_rotation, ang_velocity) * self.ang_vel_scale
-        projected_gravity = quat_rotate(torso_rotation, self.gravity_vec)
+        # projected_gravity = quat_rotate(torso_rotation, self.gravity_vec)
         dof_pos_scaled = (dof_pos - self.default_dof_pos) * self.dof_pos_scale
         roll, pitch, yaw = get_euler_xyz(torso_rotation)
         self.heading_vec = get_basis_vector(torso_rotation, self.basis_vec0).view(-1,3)
@@ -155,17 +163,18 @@ class A1Task(RLTask):
         self.prev_xys = self.xys.clone()
         self.xys = torso_position[:,:2] / self.dt
 
-        commands_scaled = self.commands * torch.tensor(
-            [self.lin_vel_scale, self.lin_vel_scale, self.ang_vel_scale],
-            requires_grad=False,
-            device=self.commands.device,
-        )
+        # commands_scaled = self.commands * torch.tensor(
+        #     [self.lin_vel_scale, self.lin_vel_scale, self.ang_vel_scale],
+        #     requires_grad=False,
+        #     device=self.commands.device,
+        # )
 
         obs = torch.cat(
             (
+                torso_position[:, 2].view(-1, 1),
                 base_lin_vel,
                 base_ang_vel,
-                projected_gravity,
+                # projected_gravity,
                 normalize_angle(yaw).unsqueeze(-1),
                 normalize_angle(pitch).unsqueeze(-1),
                 normalize_angle(roll).unsqueeze(-1),
@@ -177,6 +186,63 @@ class A1Task(RLTask):
             dim=-1,
         )
         self.obs_buf[:] = obs
+
+        observations = {
+            self._a1s.name: {
+                "obs_buf": self.obs_buf
+            }
+        }
+        return observations
+    
+    def get_obs_masa(self) -> dict:
+        torso_position, torso_rotation = self._a1s.get_world_poses(clone=False)
+        root_velocities = self._a1s.get_velocities(clone=False)
+        dof_pos = self._a1s.get_joint_positions(clone=False)
+        dof_vel = self._a1s.get_joint_velocities(clone=False)
+
+        velocity = root_velocities[:, 0:3]
+        ang_velocity = root_velocities[:, 3:6]
+
+        base_lin_vel = quat_rotate_inverse(torso_rotation, velocity) * self.lin_vel_scale
+        base_ang_vel = quat_rotate_inverse(torso_rotation, ang_velocity) * self.ang_vel_scale
+        # projected_gravity = quat_rotate(torso_rotation, self.gravity_vec)
+        dof_pos_scaled = (dof_pos - self.default_dof_pos) * self.dof_pos_scale
+        roll, pitch, yaw = get_euler_xyz(torso_rotation)
+        self.heading_vec = get_basis_vector(torso_rotation, self.basis_vec0).view(-1,3)
+        self.up_vec = get_basis_vector(torso_rotation, self.basis_vec1).view(-1,3)
+        self.prev_xys = self.xys.clone()
+        self.xys = torso_position[:,:2] / self.dt
+
+        # commands_scaled = self.commands * torch.tensor(
+        #     [self.lin_vel_scale, self.lin_vel_scale, self.ang_vel_scale],
+        #     requires_grad=False,
+        #     device=self.commands.device,
+        # )
+
+        obs = torch.cat(
+            (
+                torso_position[:, 2].view(-1, 1),
+                base_lin_vel,
+                base_ang_vel,
+                # projected_gravity,
+                normalize_angle(yaw).unsqueeze(-1),
+                normalize_angle(pitch).unsqueeze(-1),
+                normalize_angle(roll).unsqueeze(-1),
+                # commands_scaled,
+                dof_pos_scaled,
+                dof_vel * self.dof_vel_scale,
+                self.actions,
+            ),
+            dim=-1,
+        )
+        # generate input for masa agents        
+        obs[:,self.inds_neg] = - obs[:,self.inds_neg]
+        obs_shared_agents = torch.zeros([obs.shape[0], 2, len(self.left_inds)], device=obs.device, dtype=obs.dtype)
+        obs_shared_agents[:, 0] = obs[:, self.left_inds]
+        obs_shared_agents[:, 0, self.left_inds_neg] = - obs_shared_agents[:, 0, self.left_inds_neg]
+        obs_shared_agents[:, 1] = obs
+
+        self.obs_buf[:] = obs_shared_agents
 
         observations = {
             self._a1s.name: {
@@ -276,29 +342,30 @@ class A1Task(RLTask):
         self.reset_idx(indices)
 
     def calculate_metrics(self) -> None:
-        torso_position, torso_rotation = self._a1s.get_world_poses(clone=False)
-        root_velocities = self._a1s.get_velocities(clone=False)
-        dof_pos = self._a1s.get_joint_positions(clone=False)
-        dof_vel = self._a1s.get_joint_velocities(clone=False)
+        # torso_position, torso_rotation = self._a1s.get_world_poses(clone=False)
+        # root_velocities = self._a1s.get_velocities(clone=False)
+        # dof_pos = self._a1s.get_joint_positions(clone=False)
+        # dof_vel = self._a1s.get_joint_velocities(clone=False)
 
-        velocity = root_velocities[:, 0:3]
-        ang_velocity = root_velocities[:, 3:6]
+        # velocity = root_velocities[:, 0:3]
+        # ang_velocity = root_velocities[:, 3:6]
 
-        base_lin_vel = quat_rotate_inverse(torso_rotation, velocity)
-        base_ang_vel = quat_rotate_inverse(torso_rotation, ang_velocity)
+        # base_lin_vel = quat_rotate_inverse(torso_rotation, velocity)
+        # base_ang_vel = quat_rotate_inverse(torso_rotation, ang_velocity)
 
         # velocity tracking reward
-        lin_vel_error = torch.sum(torch.square(self.commands[:, :2] - base_lin_vel[:, :2]), dim=1)
-        ang_vel_error = torch.square(self.commands[:, 2] - base_ang_vel[:, 2])
-        rew_lin_vel_xy = torch.exp(-lin_vel_error / 0.25) * self.rew_scales["lin_vel_xy"]
-        rew_ang_vel_z = torch.exp(-ang_vel_error / 0.25) * self.rew_scales["ang_vel_z"]
+        # lin_vel_error = torch.sum(torch.square(self.commands[:, :2] - base_lin_vel[:, :2]), dim=1)
+        # ang_vel_error = torch.square(self.commands[:, 2] - base_ang_vel[:, 2])
+        # rew_lin_vel_xy = torch.exp(-lin_vel_error / 0.25) * self.rew_scales["lin_vel_xy"]
+        # rew_ang_vel_z = torch.exp(-ang_vel_error / 0.25) * self.rew_scales["ang_vel_z"]
 
-        rew_lin_vel_z = torch.square(base_lin_vel[:, 2]) * self.rew_scales["lin_vel_z"]
-        rew_joint_acc = torch.sum(torch.square(self.last_dof_vel - dof_vel), dim=1) * self.rew_scales["joint_acc"]
-        rew_action_rate = torch.sum(torch.square(self.last_actions - self.actions), dim=1) * self.rew_scales["action_rate"]
-        rew_cosmetic = torch.sum(torch.abs(dof_pos[:, 0:4] - self.default_dof_pos[:, 0:4]), dim=1) * self.rew_scales["cosmetic"]
+        # rew_lin_vel_z = torch.square(base_lin_vel[:, 2]) * self.rew_scales["lin_vel_z"]
+        # rew_joint_acc = torch.sum(torch.square(self.last_dof_vel - dof_vel), dim=1) * self.rew_scales["joint_acc"]
+        # rew_action_rate = torch.sum(torch.square(self.last_actions - self.actions), dim=1) * self.rew_scales["action_rate"]
+        # rew_cosmetic = torch.sum(torch.abs(dof_pos[:, 0:4] - self.default_dof_pos[:, 0:4]), dim=1) * self.rew_scales["cosmetic"]
 
         # total_reward = rew_lin_vel_xy + rew_ang_vel_z + rew_joint_acc  + rew_action_rate + rew_cosmetic + rew_lin_vel_z
+
         heading_reward = self.heading_vec[:,0] * 0.5
         up_reward = self.up_vec[:,2] * 0.5
         headup_cost = torch.abs(self.heading_vec[:,2]) * 0.5
@@ -320,7 +387,7 @@ class A1Task(RLTask):
         total_reward = torch.clip(total_reward, 0.0, None)
 
         self.last_actions[:] = self.actions[:]
-        self.last_dof_vel[:] = dof_vel[:]
+        # self.last_dof_vel[:] = dof_vel[:]
 
         # self.fallen_over = self._a1s.is_base_below_threshold(threshold=0.51, ground_heights=0.0)
         base_pos, base_quat = self._a1s.get_world_poses()
