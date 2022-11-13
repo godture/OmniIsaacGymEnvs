@@ -35,9 +35,7 @@ from omni.isaac.core.utils.torch.rotations import compute_heading_and_up, comput
 from omni.isaac.core.utils.torch.maths import torch_rand_float, tensor_clamp, unscale
 
 from omni.isaac.core.articulations import ArticulationView
-from omni.isaac.core.prims import RigidPrimView
 from omni.isaac.core.utils.prims import get_prim_at_path
-from omni.isaac.core.objects import DynamicCylinder
 
 import numpy as np
 import torch
@@ -58,11 +56,9 @@ class HumanoidLocomotionTask(LocomotionTask):
         self._sim_config = sim_config
         self._cfg = sim_config.config
         self._task_cfg = sim_config.task_config
-        self._num_observations = self._cfg['train']['num_observations']
+        self._num_observations = 87
         self._num_actions = 21
-        self._humanoid_positions = torch.tensor([0, 0, 2.34])
-        self._wood_position = torch.tensor([65, 0, 0.79])
-        self._wood_orientation = torch.tensor([0.7071068, 0, 0.7071068, 0])
+        self._humanoid_positions = torch.tensor([0, 0, 1.34])
 
         LocomotionTask.__init__(self, name=name, env=env)
         return
@@ -70,25 +66,7 @@ class HumanoidLocomotionTask(LocomotionTask):
     def set_up_scene(self, scene) -> None:
         self.get_humanoid()
         RLTask.set_up_scene(self, scene)
-        for i in range(64):
-            translation_wood = self._wood_position
-            translation_wood[1] = -157.5 + i*5
-            wood = DynamicCylinder(
-                    prim_path="/World/woods/wood_"+str(i),
-                    translation=translation_wood,
-                    name='wood_'+str(i),
-                    radius = 0.4,
-                    height= 450.,
-                    orientation=self._wood_orientation,
-                    color=torch.tensor([0.9, 0.6, 0.2]),
-                )
-            self._sim_config.apply_articulation_settings("wood", get_prim_at_path(wood.prim_path), self._sim_config.parse_actor_config("wood"))
-            scene.add(wood)
         self._humanoids = ArticulationView(prim_paths_expr="/World/envs/.*/Humanoid/torso", name="humanoid_view", reset_xform_properties=False)
-        # self._feet = [RigidPrimView(prim_paths_expr="/World/envs/.*/Humanoid/left_foot", name="left_feet_view", reset_xform_properties=False),
-        #                 RigidPrimView(prim_paths_expr="/World/envs/.*/Humanoid/right_foot", name="right_feet_view", reset_xform_properties=False)]
-        # self._left_feet = RigidPrimView(prim_paths_expr="/World/envs/.*/Humanoid/left_foot", name="left_feet_view", reset_xform_properties=False)
-        # self._right_feet = RigidPrimView(prim_paths_expr="/World/envs/.*/Humanoid/right_foot", name="right_feet_view", reset_xform_properties=False)
         scene.add(self._humanoids)
         return
 

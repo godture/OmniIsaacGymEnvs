@@ -99,8 +99,7 @@ class RLTask(BaseTask):
         """ Prepares torch buffers for RL data collection."""
 
         # prepare tensors
-        size_obs_buf = (self._num_envs,) + ((self.num_observations,) if type(self.num_observations) is int else tuple(self.num_observations))
-        self.obs_buf = torch.zeros(size_obs_buf, device=self._device, dtype=torch.float)
+        self.obs_buf = torch.zeros((self._num_envs, self.num_observations), device=self._device, dtype=torch.float)
         self.states_buf = torch.zeros((self._num_envs, self.num_states), device=self._device, dtype=torch.float)
         self.rew_buf = torch.zeros(self._num_envs, device=self._device, dtype=torch.float)
         self.reset_buf = torch.ones(self._num_envs, device=self._device, dtype=torch.long)

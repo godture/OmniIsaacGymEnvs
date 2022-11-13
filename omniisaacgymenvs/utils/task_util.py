@@ -28,18 +28,14 @@
 
 
 def initialize_task(config, env, init_sim=True):
-    from omniisaacgymenvs.tasks.a1 import A1Task
     from omniisaacgymenvs.tasks.allegro_hand import AllegroHandTask
     from omniisaacgymenvs.tasks.ant import AntLocomotionTask
-    from omniisaacgymenvs.tasks.ant_balance_bar import AntBalanceTask
-    from omniisaacgymenvs.tasks.ant_on_ball import AntonBallTask
     from omniisaacgymenvs.tasks.anymal import AnymalTask
     from omniisaacgymenvs.tasks.anymal_terrain import AnymalTerrainTask
     from omniisaacgymenvs.tasks.ball_balance import BallBalanceTask
     from omniisaacgymenvs.tasks.cartpole import CartpoleTask
     from omniisaacgymenvs.tasks.franka_cabinet import FrankaCabinetTask
     from omniisaacgymenvs.tasks.humanoid import HumanoidLocomotionTask
-    from omniisaacgymenvs.tasks.humanoid_balance_beam import HumanoidBBTask
     from omniisaacgymenvs.tasks.ingenuity import IngenuityTask
     from omniisaacgymenvs.tasks.quadcopter import QuadcopterTask
     from omniisaacgymenvs.tasks.shadow_hand import ShadowHandTask
@@ -47,18 +43,14 @@ def initialize_task(config, env, init_sim=True):
     
     # Mappings from strings to environments
     task_map = {
-        "A1": A1Task,
         "AllegroHand": AllegroHandTask,
         "Ant": AntLocomotionTask,
-        "AntBalance": AntBalanceTask,
-        "AntonBall": AntonBallTask,
         "Anymal": AnymalTask,
         "AnymalTerrain": AnymalTerrainTask,
         "BallBalance": BallBalanceTask,
         "Cartpole": CartpoleTask,
         "FrankaCabinet": FrankaCabinetTask,
         "Humanoid": HumanoidLocomotionTask,
-        "HumanoidBB": HumanoidBBTask,
         "Ingenuity": IngenuityTask,
         "Quadcopter": QuadcopterTask,
         "Crazyflie": CrazyflieTask,

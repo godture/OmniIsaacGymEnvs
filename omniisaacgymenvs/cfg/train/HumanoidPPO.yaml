@@ -1,4 +1,3 @@
-num_observations: 75
 params:
   seed: ${...seed}
 

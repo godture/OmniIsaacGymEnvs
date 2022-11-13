@@ -55,7 +55,7 @@ class AntLocomotionTask(LocomotionTask):
         self._sim_config = sim_config
         self._cfg = sim_config.config
         self._task_cfg = sim_config.task_config
-        self._num_observations = self._cfg['train']['num_observations']
+        self._num_observations = 60
         self._num_actions = 8
         self._ant_positions = torch.tensor([0, 0, 0.5])
 
@@ -92,11 +92,4 @@ class AntLocomotionTask(LocomotionTask):
 @torch.jit.script
 def get_dof_at_limit_cost(obs_buf, num_dof):
     # type: (Tensor, int) -> Tensor
-    if obs_buf.shape[-1] == 36:
-        return torch.sum(obs_buf[:, 12:12+num_dof] > 0.99, dim=-1)
-    # elif obs_buf.shape[-1] == 70:
-    #     return torch.sum(obs_buf[:, 46:46+num_dof] > 0.99, dim=-1)
-    # elif obs_buf.shape[-1] in [66, 74]:
-    #     return torch.sum(obs_buf[:, 42:42+num_dof] > 0.99, dim=-1)
-    else:
-        assert False, f"no masa version for simple locomotion task. Observation shape {obs_buf.shape[-1]} not exist"
+    return torch.sum(obs_buf[:, 12:12+num_dof] > 0.99, dim=-1)
